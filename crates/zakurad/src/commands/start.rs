@@ -372,6 +372,13 @@ impl StartCmd {
         Self::validate_debug_blocksync_throughput_config(&config)?;
         config.rpc.validate().map_err(|error| eyre!(error))?;
 
+        #[cfg(not(feature = "indexer"))]
+        if config.explorer.listen_addr.is_some() {
+            return Err(eyre!(
+                "explorer.listen_addr requires zakurad to be built with the `indexer` feature"
+            ));
+        }
+
         if config.zcashd_compat.enabled {
             zcashd_compat::run_preflight(&config, self.unsafe_low_specs)?;
         }
@@ -714,6 +721,40 @@ impl StartCmd {
         // Create a channel to send mined blocks to the gossip task
         let submit_block_channel = SubmitBlockChannel::new();
 
+        #[cfg(feature = "indexer")]
+        let indexer = {
+            if config.state.storage_mode != StorageMode::Archive {
+                return Err(eyre!(
+                    "the explorer block index requires state.storage_mode = 'archive' for historical fee backfill"
+                ));
+            }
+
+            let network = config.network.network.clone();
+            let index_path = (!config.state.ephemeral).then(|| {
+                config.state.db_path(
+                    "indexer",
+                    zakura_indexer::DATABASE_FORMAT_VERSION,
+                    &config.network.network,
+                )
+            });
+            info!(?index_path, "opening explorer indexer database");
+            let indexer = tokio::task::spawn_blocking(move || match index_path {
+                Some(path) => zakura_indexer::Indexer::open(path, network),
+                None => zakura_indexer::Indexer::open_ephemeral(network),
+            })
+            .await
+            .map_err(|error| eyre!("failed to join explorer indexer open task: {error}"))?
+            .map_err(|error| eyre!("failed to open explorer indexer: {error}"))?;
+
+            let block_sync_task = zakura_indexer::spawn_block_sync(
+                indexer.clone(),
+                read_only_state_service.clone(),
+                latest_chain_tip.clone(),
+            );
+            node_tasks.track(&block_sync_task);
+            indexer
+        };
+
         // Launch RPC server
         let (rpc_impl, mut rpc_tx_queue_handle) = RpcImpl::new_with_pending_blocks(
             config.network.network.clone(),
@@ -736,6 +777,21 @@ impl StartCmd {
         let rpc_impl = rpc_impl.with_end_of_support_height(
             sync::end_of_support::end_of_support_height(&config.network.network),
         );
+        #[cfg(feature = "indexer")]
+        let rpc_impl = rpc_impl.with_indexer(indexer.clone());
+
+        #[cfg(feature = "indexer")]
+        let explorer_api_task_handle = {
+            let (task, _listen_addr) =
+                zakura_indexer::api::init(config.explorer.clone(), indexer.clone())
+                    .await
+                    .map_err(|error| eyre!(error))?;
+            task
+        };
+        #[cfg(not(feature = "indexer"))]
+        let explorer_api_task_handle =
+            tokio::spawn(std::future::pending::<Result<(), tower::BoxError>>().in_current_span());
+        node_tasks.track(&explorer_api_task_handle);
 
         let node_services = ready.as_ref().map(|_| crate::node::NodeServices {
             read_state: read_only_state_service.clone(),
@@ -1000,6 +1056,7 @@ impl StartCmd {
         // ongoing tasks
         pin!(rpc_task_handle);
         pin!(admin_rpc_task_handle);
+        pin!(explorer_api_task_handle);
         pin!(indexer_rpc_task_handle);
         pin!(syncer_task_handle);
         pin!(block_gossip_task_handle);
@@ -1073,6 +1130,13 @@ impl StartCmd {
                         .expect("unexpected panic in the admin rpc task");
                     info!(?admin_rpc_server_result, "admin rpc task exited");
                     Ok(())
+                }
+
+                explorer_api_join_result = &mut explorer_api_task_handle => {
+                    let explorer_api_result = explorer_api_join_result
+                        .expect("unexpected panic in the explorer REST API task");
+                    info!(?explorer_api_result, "explorer REST API task exited");
+                    explorer_api_result.map_err(|error| eyre!(error))
                 }
 
                 rpc_tx_queue_result = &mut rpc_tx_queue_handle => {
@@ -1188,6 +1252,7 @@ impl StartCmd {
         // ongoing tasks
         rpc_task_handle.abort();
         admin_rpc_task_handle.abort();
+        explorer_api_task_handle.abort();
         rpc_tx_queue_handle.abort();
         health_task_handle.abort();
         syncer_task_handle.abort();

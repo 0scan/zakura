@@ -83,6 +83,7 @@ use zakura_chain::{
 use zakura_consensus::{
     funding_stream_address, router::service_trait::BlockVerifierService, RouterError,
 };
+use zakura_indexer::{BlocksResponse, Indexer};
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
 use zakura_state::{
@@ -219,6 +220,7 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("getaddressutxos", RpcAccess::Unauthenticated),
     ("stop", RpcAccess::Test),
     ("getblockcount", RpcAccess::Unauthenticated),
+    ("getblocks", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -256,7 +258,9 @@ pub(super) const PARAM_POOL_DESC: &str = "The pool from which subtrees should be
 Either \"sapling\", \"orchard\", or \"ironwood\".";
 pub(super) const PARAM_START_INDEX_DESC: &str =
     "The index of the first 2^16-leaf subtree to return.";
-pub(super) const PARAM_LIMIT_DESC: &str = "The maximum number of subtrees to return.";
+pub(super) const PARAM_LIMIT_DESC: &str = "The maximum number of records to return.";
+pub(super) const PARAM_CURSOR_DESC: &str =
+    "The opaque next-page cursor returned by an earlier getblocks call.";
 pub(super) const PARAM_REQUEST_DESC: &str = "The request object containing the parameters.";
 pub(super) const PARAM_INDEX_DESC: &str = "The index of the subtree to return.";
 pub(super) const PARAM_RAW_TRANSACTION_HEX_DESC: &str = "The hex-encoded raw transaction bytes.";
@@ -676,6 +680,23 @@ pub trait Rpc {
     #[method(name = "getblockcount")]
     fn get_block_count(&self) -> Result<u32>;
 
+    /// Returns a newest-first page of explorer block summaries from Zakura's
+    /// in-process RocksDB index.
+    ///
+    /// method: post
+    /// tags: blockchain
+    ///
+    /// # Parameters
+    ///
+    /// - `limit`: (numeric, optional, default=5, minimum=1, maximum=100) Maximum records to return.
+    /// - `cursor`: (string, optional) Opaque `nextCursor` returned by the previous page.
+    #[method(name = "getblocks")]
+    async fn get_blocks(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> Result<BlocksResponse>;
+
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
     ///
@@ -1007,6 +1028,9 @@ where
     /// Allows efficient access to the best tip of the blockchain.
     latest_chain_tip: Tip,
 
+    /// Read handle for the optional in-process explorer indexer.
+    indexer: Option<Indexer>,
+
     // Tasks
     //
     /// A sender component of a channel used to send transactions to the mempool queue.
@@ -1156,6 +1180,7 @@ where
             state: state.clone(),
             read_state: read_state.clone(),
             latest_chain_tip: latest_chain_tip.clone(),
+            indexer: None,
             queue_sender,
             address_book,
             last_warn_error_log_rx,
@@ -1492,6 +1517,12 @@ where
     /// When unset, or set to `None`, the RPC omits `end_of_service`.
     pub fn with_end_of_support_height(mut self, end_of_support_height: Option<Height>) -> Self {
         self.end_of_support_height = end_of_support_height;
+        self
+    }
+
+    /// Adds the in-process explorer indexer used by index-backed RPC methods.
+    pub fn with_indexer(mut self, indexer: Indexer) -> Self {
+        self.indexer = Some(indexer);
         self
     }
 
@@ -2881,6 +2912,25 @@ where
 
     fn get_block_count(&self) -> Result<u32> {
         best_chain_tip_height(&self.latest_chain_tip).map(|height| height.0)
+    }
+
+    async fn get_blocks(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> Result<BlocksResponse> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+
+        match indexer.recent_blocks(limit, cursor).await {
+            Ok(response) => Ok(response),
+            Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
+                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+            }
+            Err(error) => Err(error).map_misc_error(),
+        }
     }
 
     async fn get_block_hash(&self, index: i32) -> Result<GetBlockHashResponse> {

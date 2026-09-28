@@ -78,6 +78,9 @@ pub struct ZakuradConfig {
     /// RPC configuration
     pub rpc: zakura_rpc::config::rpc::Config,
 
+    /// Read-only explorer REST API configuration.
+    pub explorer: zakura_indexer::api::Config,
+
     /// Mining configuration
     pub mining: zakura_rpc::config::mining::Config,
 

@@ -7387,6 +7387,7 @@ dependencies = [
  "zakura-chain",
  "zakura-consensus",
  "zakura-header-chain",
+ "zakura-indexer",
  "zakura-jsonl-trace",
  "zakura-network",
  "zakura-node-services",
@@ -7630,6 +7631,27 @@ dependencies = [
  "toml 1.1.2+spec-1.1.0",
  "zakura-chain",
  "zakura-test",
+]
+
+[[package]]
+name = "zakura-indexer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rocksdb",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "zakura-chain",
+ "zakura-state",
 ]
 
 [[package]]
@@ -8094,6 +8116,7 @@ dependencies = [
  "zakura-address",
  "zakura-chain",
  "zakura-consensus",
+ "zakura-indexer",
  "zakura-keys",
  "zakura-network",
  "zakura-node-services",

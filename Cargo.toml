@@ -2,6 +2,7 @@
 members = [
         "crates/zakurad",
         "crates/zakura-chain",
+        "crates/zakura-indexer",
         "crates/zakura-header-chain",
         "crates/zakura-network",
         "crates/zakura-state",

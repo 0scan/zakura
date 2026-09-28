@@ -151,6 +151,15 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     result: |g| g.result::<openrpsee::openrpc::ResultType>("getblockcount_result"),
     deprecated: false,
 },
+"getblocks" => openrpsee::openrpc::RpcMethod {
+    description: "Returns a newest-first page of explorer block summaries from Zakura\'s\nin-process RocksDB index.\n\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `limit`: (numeric, optional, default=5, minimum=1, maximum=100) Maximum records to return.\n- `cursor`: (string, optional) Opaque `nextCursor` returned by the previous page.\n",
+    params: |_g| vec![
+        _g.param::<u32>("limit", crate::methods::PARAM_LIMIT_DESC, false),
+        _g.param::<String>("cursor", crate::methods::PARAM_CURSOR_DESC, false),
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getblocks_result"),
+    deprecated: false,
+},
 "getblockhash" => openrpsee::openrpc::RpcMethod {
     description: "Returns the hash of the block of a given height iff the index argument correspond\nto a block in the best chain.\n\nzcashd reference: [`getblockhash`](https://zcash-rpc.github.io/getblockhash.html)\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `index`: (numeric, required, example=1) The block index.\n\n# Notes\n\n- If `index` is positive then index = block height.\n- If `index` is negative then -1 is the last known valid block.\n",
     params: |_g| vec![
