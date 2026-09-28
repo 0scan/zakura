@@ -1,8 +1,8 @@
 //! Read-only HTTP API backed directly by the in-process explorer index.
 //!
-//! The first version exposes `GET /api/v1/blocks?limit=5&cursor=...` on a
-//! dedicated listener. The cursor is the opaque `nextCursor` value returned by
-//! the preceding page.
+//! The API exposes cursor-paginated canonical blocks at
+//! `GET /api/v1/blocks?limit=5&cursor=...` and complete canonical block details
+//! at `GET /api/v1/blocks/{height_or_hash}` on a dedicated listener.
 
 mod config;
 mod response;

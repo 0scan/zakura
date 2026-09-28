@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     database::{DatabaseColumn, MetadataKey},
-    types::{BlocksPagination, BlocksResponse},
+    types::{BlockRecord, BlocksPagination, BlocksResponse},
     Error, Indexer,
 };
 
@@ -55,6 +55,14 @@ impl Indexer {
             Error::CorruptData("stored canonical block hash must be 32 bytes".to_string())
         })?);
         Ok(Some(hash))
+    }
+
+    /// Returns the explorer record stored for `hash`.
+    pub(super) fn block_record(&self, hash: Hash) -> Result<Option<BlockRecord>, Error> {
+        self.database
+            .get(DatabaseColumn::BlockRecords, hash.0)?
+            .map(|value| serde_json::from_slice(&value).map_err(Error::from))
+            .transpose()
     }
 
     fn recent_blocks_blocking(
@@ -105,13 +113,10 @@ impl Indexer {
                     height.0
                 ))
             })?;
-            let value = self
-                .database
-                .get(DatabaseColumn::BlockRecords, hash.0)?
-                .ok_or_else(|| {
-                    Error::CorruptData(format!("missing block record for canonical hash {hash}"))
-                })?;
-            blocks.push(serde_json::from_slice(&value)?);
+            let record = self.block_record(hash)?.ok_or_else(|| {
+                Error::CorruptData(format!("missing block record for canonical hash {hash}"))
+            })?;
+            blocks.push(record);
             last_position = Some(BlockCursor::new(height, hash));
 
             let Ok(previous_height) = height.previous() else {

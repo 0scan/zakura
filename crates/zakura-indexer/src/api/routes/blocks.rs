@@ -3,12 +3,14 @@
 use std::time::Duration;
 
 use hyper::StatusCode;
+use zakura_state::{HashOrHeight, ReadState};
 
 use crate::{Error, Indexer};
 
 use super::super::response::{self, ApiResponse};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+const DETAIL_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_QUERY_LENGTH: usize = 512;
 
 #[derive(Default)]
@@ -40,6 +42,52 @@ pub(super) async fn get(query: Option<&str>, indexer: Indexer) -> ApiResponse {
         Err(_) => {
             tracing::warn!("explorer block query timed out");
             response::error(StatusCode::GATEWAY_TIMEOUT, "block query timed out")
+        }
+    }
+}
+
+pub(super) async fn get_details<State>(
+    identifier: &str,
+    indexer: Indexer,
+    read_state: State,
+) -> ApiResponse
+where
+    State: ReadState,
+{
+    let identifier = match HashOrHeight::new(identifier, None) {
+        Ok(identifier) => identifier,
+        Err(message) => return response::error(StatusCode::BAD_REQUEST, &message),
+    };
+
+    match tokio::time::timeout(
+        DETAIL_QUERY_TIMEOUT,
+        indexer.block_details(read_state, identifier),
+    )
+    .await
+    {
+        Ok(Ok(Some(block))) => response::json(StatusCode::OK, &block),
+        Ok(Ok(None)) => response::error(StatusCode::NOT_FOUND, "block not found"),
+        Ok(Err(Error::BlockNotIndexed(message))) => {
+            tracing::debug!(%message, "explorer block detail is waiting for the index");
+            response::error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "block index is still catching up",
+            )
+        }
+        Ok(Err(Error::StateRequest(message))) => {
+            tracing::error!(%message, "explorer state query failed");
+            response::error(StatusCode::SERVICE_UNAVAILABLE, "block state query failed")
+        }
+        Ok(Err(error)) => {
+            tracing::error!(?error, "explorer block detail query failed");
+            response::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "block detail query failed",
+            )
+        }
+        Err(_) => {
+            tracing::warn!("explorer block detail query timed out");
+            response::error(StatusCode::GATEWAY_TIMEOUT, "block detail query timed out")
         }
     }
 }

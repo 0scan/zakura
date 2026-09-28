@@ -206,7 +206,7 @@ impl Indexer {
             .collect()
     }
 
-    fn transparent_output(&self, outpoint: OutPoint) -> Result<Option<Utxo>, Error> {
+    pub(super) fn transparent_output(&self, outpoint: OutPoint) -> Result<Option<Utxo>, Error> {
         self.database
             .get(
                 DatabaseColumn::TransparentOutputs,

@@ -5,6 +5,7 @@ mod blocks;
 use std::convert::Infallible;
 
 use hyper::{Method, Request, StatusCode};
+use zakura_state::ReadState;
 
 use crate::Indexer;
 
@@ -12,14 +13,27 @@ use super::response::{self, ApiResponse};
 
 const BLOCKS_PATH: &str = "/api/v1/blocks";
 
-pub(super) async fn handle<B>(
+pub(super) async fn handle<B, State>(
     request: Request<B>,
     indexer: Indexer,
-) -> Result<ApiResponse, Infallible> {
-    let response = match (request.method(), request.uri().path()) {
-        (&Method::GET, BLOCKS_PATH) => blocks::get(request.uri().query(), indexer).await,
-        (&Method::OPTIONS, BLOCKS_PATH) => response::empty(StatusCode::NO_CONTENT),
-        (_, BLOCKS_PATH) => response::error(
+    read_state: State,
+) -> Result<ApiResponse, Infallible>
+where
+    State: ReadState,
+{
+    let path = request.uri().path();
+    let block_identifier = path
+        .strip_prefix(BLOCKS_PATH)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .filter(|identifier| !identifier.is_empty() && !identifier.contains('/'));
+    let response = match (request.method(), path, block_identifier) {
+        (&Method::GET, BLOCKS_PATH, _) => blocks::get(request.uri().query(), indexer).await,
+        (&Method::OPTIONS, BLOCKS_PATH, _) => response::empty(StatusCode::NO_CONTENT),
+        (&Method::GET, _, Some(identifier)) => {
+            blocks::get_details(identifier, indexer, read_state).await
+        }
+        (&Method::OPTIONS, _, Some(_)) => response::empty(StatusCode::NO_CONTENT),
+        (_, BLOCKS_PATH, _) | (_, _, Some(_)) => response::error(
             StatusCode::METHOD_NOT_ALLOWED,
             "only GET and OPTIONS are supported for this route",
         ),
@@ -34,7 +48,9 @@ mod tests {
     use http_body_util::BodyExt;
     use hyper::{header::ACCESS_CONTROL_ALLOW_ORIGIN, Request, StatusCode};
     use serde_json::Value;
+    use tower::BoxError;
     use zakura_chain::parameters::Network;
+    use zakura_state::{ReadRequest, ReadResponse};
 
     use crate::Indexer;
 
@@ -80,6 +96,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn validates_and_resolves_block_detail_identifiers() {
+        let response = request("/api/v1/blocks/not-a-block").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = request("/api/v1/blocks/42").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     async fn request(uri: &str) -> super::ApiResponse {
         let indexer =
             Indexer::open_ephemeral(Network::Mainnet).expect("ephemeral test indexer should open");
@@ -88,8 +113,25 @@ mod tests {
             .body(())
             .expect("test request should be valid");
 
-        handle(request, indexer)
+        handle(request, indexer, empty_read_state())
             .await
             .expect("explorer request handling is infallible")
+    }
+
+    fn empty_read_state() -> impl tower::Service<
+        ReadRequest,
+        Response = ReadResponse,
+        Error = BoxError,
+        Future: Send + 'static,
+    > + Clone
+           + Send
+           + Sync
+           + 'static {
+        tower::service_fn(|request: ReadRequest| async move {
+            match request {
+                ReadRequest::BlockAndSize(_) => Ok(ReadResponse::BlockAndSize(None)),
+                request => Err(format!("unexpected test state request: {request:?}").into()),
+            }
+        })
     }
 }

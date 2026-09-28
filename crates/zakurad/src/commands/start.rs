@@ -782,10 +782,13 @@ impl StartCmd {
 
         #[cfg(feature = "indexer")]
         let explorer_api_task_handle = {
-            let (task, _listen_addr) =
-                zakura_indexer::api::init(config.explorer.clone(), indexer.clone())
-                    .await
-                    .map_err(|error| eyre!(error))?;
+            let (task, _listen_addr) = zakura_indexer::api::init(
+                config.explorer.clone(),
+                indexer.clone(),
+                read_only_state_service.clone(),
+            )
+            .await
+            .map_err(|error| eyre!(error))?;
             task
         };
         #[cfg(not(feature = "indexer"))]

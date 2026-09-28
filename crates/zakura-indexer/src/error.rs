@@ -32,6 +32,10 @@ pub enum Error {
     #[error("invalid block page cursor: {0}")]
     InvalidCursor(String),
 
+    /// State has the block, but the explorer index has not caught up to it yet.
+    #[error("block is not available in the explorer index yet: {0}")]
+    BlockNotIndexed(String),
+
     /// A consensus-serialized transparent output was invalid.
     #[error("indexer transparent output error: {0}")]
     TransparentOutput(String),

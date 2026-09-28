@@ -6,6 +6,7 @@ use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use tokio::{net::TcpListener, sync::Semaphore, task::JoinHandle};
 use tower::BoxError;
+use zakura_state::ReadState;
 
 use crate::Indexer;
 
@@ -19,10 +20,14 @@ type ServerTask = JoinHandle<Result<(), BoxError>>;
 /// Starts the explorer REST API when a listen address is configured.
 ///
 /// Returns a pending task and no bound address when the API is disabled.
-pub async fn init(
+pub async fn init<State>(
     config: Config,
     indexer: Indexer,
-) -> Result<(ServerTask, Option<SocketAddr>), BoxError> {
+    read_state: State,
+) -> Result<(ServerTask, Option<SocketAddr>), BoxError>
+where
+    State: ReadState,
+{
     let Some(listen_addr) = config.listen_addr else {
         let task = tokio::spawn(std::future::pending::<Result<(), BoxError>>());
         return Ok((task, None));
@@ -33,11 +38,18 @@ pub async fn init(
     let local_addr = listener.local_addr()?;
     tracing::info!(%local_addr, "opened explorer REST API endpoint");
 
-    let task = tokio::spawn(run(listener, indexer));
+    let task = tokio::spawn(run(listener, indexer, read_state));
     Ok((task, Some(local_addr)))
 }
 
-async fn run(listener: TcpListener, indexer: Indexer) -> Result<(), BoxError> {
+async fn run<State>(
+    listener: TcpListener,
+    indexer: Indexer,
+    read_state: State,
+) -> Result<(), BoxError>
+where
+    State: ReadState,
+{
     let connection_permits = Arc::new(Semaphore::new(MAX_CONNECTIONS));
 
     loop {
@@ -48,11 +60,13 @@ async fn run(listener: TcpListener, indexer: Indexer) -> Result<(), BoxError> {
             .expect("the explorer connection semaphore is never closed");
         let (stream, peer_addr) = listener.accept().await?;
         let indexer = indexer.clone();
+        let read_state = read_state.clone();
 
         tokio::spawn(async move {
             let _permit = permit;
-            let service =
-                hyper::service::service_fn(move |request| routes::handle(request, indexer.clone()));
+            let service = hyper::service::service_fn(move |request| {
+                routes::handle(request, indexer.clone(), read_state.clone())
+            });
 
             match tokio::time::timeout(
                 CONNECTION_TIMEOUT,
@@ -81,6 +95,7 @@ mod tests {
         net::TcpStream,
     };
     use zakura_chain::parameters::Network;
+    use zakura_state::{ReadRequest, ReadResponse};
 
     use crate::Indexer;
 
@@ -93,7 +108,12 @@ mod tests {
         let config = Config {
             listen_addr: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))),
         };
-        let (server, listen_addr) = init(config, indexer)
+        let read_state = tower::service_fn(|request: ReadRequest| async move {
+            Err::<ReadResponse, tower::BoxError>(
+                format!("unexpected test state request: {request:?}").into(),
+            )
+        });
+        let (server, listen_addr) = init(config, indexer, read_state)
             .await
             .expect("explorer test server should start");
         let listen_addr = listen_addr.expect("configured server should bind a socket");
