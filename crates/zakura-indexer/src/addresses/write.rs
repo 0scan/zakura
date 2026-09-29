@@ -16,9 +16,9 @@ use crate::{
 };
 
 use super::disk_format::{
-    address_order_key, address_order_prefix, address_record_key, decode_address_record,
-    decode_transaction_address_effects, encode_address_record, encode_transaction_address_effects,
-    transaction_address_effects_key,
+    address_balance_order_key, address_order_key, address_order_prefix, address_record_key,
+    decode_address_record, decode_transaction_address_effects, encode_address_record,
+    encode_transaction_address_effects, transaction_address_effects_key,
 };
 
 pub(crate) type PendingAddressRecords = HashMap<Address, Option<AddressRecord>>;
@@ -82,6 +82,12 @@ impl Indexer {
                 },
             };
             update_funded_address_count(funded_address_count, was_funded, is_funded(updated))?;
+            self.prepare_address_balance_index_update(
+                batch,
+                effect.address,
+                current,
+                Some(updated),
+            )?;
 
             self.database.insert(
                 batch,
@@ -123,6 +129,7 @@ impl Indexer {
                     ))
                 })?;
             let was_funded = is_funded(record);
+            let current = record;
             record.total_received_zat = record
                 .total_received_zat
                 .checked_sub(effect.received_zat)
@@ -141,6 +148,13 @@ impl Indexer {
                         "address transaction count underflowed on rollback".to_string(),
                     )
                 })?;
+
+            self.prepare_address_balance_index_update(
+                batch,
+                effect.address,
+                Some(current),
+                (record.transaction_count > 0).then_some(record),
+            )?;
 
             self.database.delete(
                 batch,
@@ -231,6 +245,37 @@ impl Indexer {
             .get(&address)
             .copied()
             .map_or_else(|| self.address_record(address), Ok)
+    }
+
+    fn prepare_address_balance_index_update(
+        &self,
+        batch: &mut WriteBatch,
+        address: Address,
+        current: Option<AddressRecord>,
+        updated: Option<AddressRecord>,
+    ) -> Result<(), Error> {
+        if let Some(current) = current {
+            let balance = address_balance(current)?;
+            if balance > 0 {
+                self.database.delete(
+                    batch,
+                    DatabaseColumn::AddressBalanceOrder,
+                    address_balance_order_key(address, balance),
+                );
+            }
+        }
+        if let Some(updated) = updated {
+            let balance = address_balance(updated)?;
+            if balance > 0 {
+                self.database.insert(
+                    batch,
+                    DatabaseColumn::AddressBalanceOrder,
+                    address_balance_order_key(address, balance),
+                    b"",
+                );
+            }
+        }
+        Ok(())
     }
 
     fn derive_address_effects(
@@ -347,6 +392,15 @@ impl Indexer {
 
 fn is_funded(record: AddressRecord) -> bool {
     record.total_received_zat > record.total_sent_zat
+}
+
+fn address_balance(record: AddressRecord) -> Result<u64, Error> {
+    record
+        .total_received_zat
+        .checked_sub(record.total_sent_zat)
+        .ok_or_else(|| {
+            Error::CorruptData("address sent total exceeds its received total".to_string())
+        })
 }
 
 fn update_funded_address_count(

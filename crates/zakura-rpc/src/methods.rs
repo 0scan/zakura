@@ -85,7 +85,7 @@ use zakura_consensus::{
 };
 use zakura_indexer::{
     AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, ChartDataRequest,
-    ChartDataResponse, Indexer, TransactionsResponse,
+    ChartDataResponse, Indexer, RichListRequest, RichListResponse, TransactionsResponse,
 };
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
@@ -240,6 +240,7 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("getindexerstatus", RpcAccess::Unauthenticated),
     ("getnetworkstats", RpcAccess::Unauthenticated),
     ("getexplorerchartdata", RpcAccess::Unauthenticated),
+    ("getexplorerrichlist", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -815,6 +816,17 @@ pub trait Rpc {
     #[method(name = "getexplorerchartdata")]
     async fn get_explorer_chart_data(&self, request: ChartDataRequest)
         -> Result<ChartDataResponse>;
+
+    /// Returns the cursor-paginated transparent-address balance ranking.
+    ///
+    /// method: post
+    /// tags: explorer
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, required) Rich-list cursor and page limit.
+    #[method(name = "getexplorerrichlist")]
+    async fn get_explorer_rich_list(&self, request: RichListRequest) -> Result<RichListResponse>;
 
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
@@ -3311,6 +3323,21 @@ where
         match indexer.chart_data(request).await {
             Ok(response) => Ok(response),
             Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {
+                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+            }
+            Err(error) => Err(error).map_misc_error(),
+        }
+    }
+
+    async fn get_explorer_rich_list(&self, request: RichListRequest) -> Result<RichListResponse> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        match indexer.rich_list(request).await {
+            Ok(response) => Ok(response),
+            Err(error @ zakura_indexer::Error::InvalidCursor(_))
+            | Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {
                 Err(error).map_error(server::error::LegacyCode::InvalidParameter)
             }
             Err(error) => Err(error).map_misc_error(),

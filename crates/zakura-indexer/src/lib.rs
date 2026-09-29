@@ -28,7 +28,8 @@ pub use types::{
     AddressTransactionsPagination, AddressTransactionsResponse, BlockDetails, BlockRecord,
     BlockTransaction, BlockTransactionInput, BlockTransactionOutput, BlockTrees, BlocksPagination,
     BlocksResponse, ChainTotals, ChartDataEntry, ChartDataRequest, ChartDataResponse, IndexerStats,
-    PageDirection, RollingDayStats, ShieldedFlow, ShieldedPool, TransactionClassification,
+    PageDirection, RichListEntry, RichListPagination, RichListRequest, RichListResponse,
+    RichListSummary, RollingDayStats, ShieldedFlow, ShieldedPool, TransactionClassification,
     TransactionData, TransactionDetails, TransactionKind, TransactionListItem, TransactionStatus,
     TransactionsPagination, TransactionsResponse, TreeSize, ValuePoolBalance,
 };

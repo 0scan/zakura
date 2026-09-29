@@ -17,7 +17,7 @@ use crate::Error;
 type DatabaseEntry = (Vec<u8>, Vec<u8>);
 
 /// On-disk format version for the rebuildable indexer database.
-pub const DATABASE_FORMAT_VERSION: u64 = 6;
+pub const DATABASE_FORMAT_VERSION: u64 = 7;
 
 /// Cloneable low-level database shared by all index domains.
 #[derive(Clone)]
@@ -198,6 +198,27 @@ impl IndexerDatabase {
             if key.as_ref() > end {
                 break;
             }
+            entries.push((key.to_vec(), value.to_vec()));
+            if entries.len() == limit {
+                break;
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Returns at most `limit` entries at or above `start`, in key order.
+    pub(crate) fn scan_forward_from(
+        &self,
+        column: DatabaseColumn,
+        start: &[u8],
+        limit: usize,
+    ) -> Result<Vec<DatabaseEntry>, Error> {
+        let mut entries = Vec::with_capacity(limit);
+        for entry in self.db.iterator_cf(
+            self.column_family(column),
+            IteratorMode::From(start, Direction::Forward),
+        ) {
+            let (key, value) = entry?;
             entries.push((key.to_vec(), value.to_vec()));
             if entries.len() == limit {
                 break;

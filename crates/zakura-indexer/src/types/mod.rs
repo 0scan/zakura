@@ -9,6 +9,7 @@ mod block_page;
 mod block_transaction;
 mod chart;
 mod pagination;
+mod rich_list;
 mod stats;
 mod transaction;
 mod transaction_details;
@@ -25,6 +26,9 @@ pub use block_transaction::{
 };
 pub use chart::{ChartDataEntry, ChartDataRequest, ChartDataResponse};
 pub use pagination::PageDirection;
+pub use rich_list::{
+    RichListEntry, RichListPagination, RichListRequest, RichListResponse, RichListSummary,
+};
 pub use stats::{ChainTotals, IndexerStats, RollingDayStats};
 pub use transaction::{
     ShieldedFlow, ShieldedPool, TransactionClassification, TransactionKind, TransactionListItem,

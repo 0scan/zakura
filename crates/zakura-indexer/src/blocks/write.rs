@@ -593,7 +593,7 @@ mod tests {
 
     use crate::{
         transactions::TransactionQuery,
-        types::{ChartDataRequest, PageDirection, TransactionKind},
+        types::{ChartDataRequest, PageDirection, RichListRequest, TransactionKind},
         Indexer,
     };
 
@@ -711,7 +711,11 @@ mod tests {
         let indexer =
             Indexer::open(directory.path(), network).expect("temporary index should open");
         let address = Address::from_pub_key_hash(NetworkKind::Testnet, [7; 20]);
+        let richer_address = Address::from_pub_key_hash(NetworkKind::Testnet, [8; 20]);
         let value: Amount<NonNegative> = 123_456
+            .try_into()
+            .expect("test output value is within the valid monetary range");
+        let richer_value: Amount<NonNegative> = 234_567
             .try_into()
             .expect("test output value is within the valid monetary range");
         let mut block = (*regtest_genesis_block()).clone();
@@ -723,7 +727,10 @@ mod tests {
         };
         let coinbase = Arc::new(Transaction::V1 {
             inputs,
-            outputs: vec![Output::new(value, address.script())],
+            outputs: vec![
+                Output::new(value, address.script()),
+                Output::new(richer_value, richer_address.script()),
+            ],
             lock_time,
         });
         block.transactions = vec![coinbase];
@@ -748,6 +755,34 @@ mod tests {
         assert!(summary.last_seen.is_some());
         assert!(summary.first_funding.as_ref().unwrap().is_coinbase);
 
+        let rich_list = indexer
+            .rich_list(RichListRequest {
+                limit: Some(1),
+                cursor: None,
+            })
+            .await
+            .expect("funded address should be ranked");
+        assert_eq!(rich_list.entries.len(), 1);
+        assert_eq!(rich_list.entries[0].rank, 1);
+        assert_eq!(rich_list.entries[0].address, richer_address.to_string());
+        assert_eq!(rich_list.entries[0].balance_zat, "234567");
+        assert_eq!(rich_list.summary.funded_transparent_address_count, 2);
+        assert_eq!(rich_list.summary.top_10_balance_zat, "358023");
+        assert_eq!(rich_list.pagination.total, "2");
+        assert!(rich_list.pagination.has_next);
+        let second_page = indexer
+            .rich_list(RichListRequest {
+                limit: Some(1),
+                cursor: rich_list.pagination.next_cursor,
+            })
+            .await
+            .expect("rich-list cursor should return the next address");
+        assert_eq!(second_page.entries.len(), 1);
+        assert_eq!(second_page.entries[0].rank, 2);
+        assert_eq!(second_page.entries[0].address, address.to_string());
+        assert_eq!(second_page.entries[0].balance_zat, "123456");
+        assert!(!second_page.pagination.has_next);
+
         let page = indexer
             .address_transactions_page(address, None, None, PageDirection::Next)
             .await
@@ -761,7 +796,7 @@ mod tests {
             .chart_data(ChartDataRequest::default())
             .await
             .expect("funded-address chart snapshot should be queryable");
-        assert_eq!(chart.entries[0].funded_transparent_address_count, 1);
+        assert_eq!(chart.entries[0].funded_transparent_address_count, 2);
 
         indexer
             .rollback_blocks_to(None)
@@ -774,6 +809,12 @@ mod tests {
             .await
             .unwrap();
         assert!(page.transactions.is_empty());
+        let rich_list = indexer
+            .rich_list(RichListRequest::default())
+            .await
+            .expect("rolled-back rich list should be queryable");
+        assert!(rich_list.entries.is_empty());
+        assert_eq!(rich_list.summary.funded_transparent_address_count, 0);
     }
 
     #[tokio::test]
