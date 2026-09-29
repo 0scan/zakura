@@ -21,9 +21,6 @@ pub struct BlockDetails {
     /// Whether this block is at or below the durable finalized tip.
     pub finalized: bool,
 
-    /// Explorer-facing finality label.
-    pub finality_status: String,
-
     /// Whether this response describes an archived orphaned block.
     pub is_orphaned: bool,
 
@@ -69,20 +66,8 @@ pub struct BlockDetails {
     /// Note commitment tree sizes after this block.
     pub trees: BlockTrees,
 
-    /// URL associated with the attributed mining pool.
-    pub miner_pool_url: Option<String>,
-
-    /// Region associated with the attributed mining pool.
-    pub miner_pool_region: Option<String>,
-
-    /// Whether the selected transparent recipient is a funding stream rather than a miner.
-    pub miner_pool_is_funding_stream: bool,
-
     /// Complete coinbase input script as raw hexadecimal bytes.
     pub coinbase_hex: Option<String>,
-
-    /// Best-effort UTF-8 rendering of the coinbase input script.
-    pub coinbase_text: Option<String>,
 
     /// Transactions in their canonical block order.
     pub transactions: Vec<BlockTransaction>,

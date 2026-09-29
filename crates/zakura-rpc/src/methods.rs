@@ -83,7 +83,9 @@ use zakura_chain::{
 use zakura_consensus::{
     funding_stream_address, router::service_trait::BlockVerifierService, RouterError,
 };
-use zakura_indexer::{BlocksResponse, Indexer};
+use zakura_indexer::{
+    BlockDetails, BlocksResponse, Indexer, TransactionDetails, TransactionsResponse,
+};
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
 use zakura_state::{
@@ -115,6 +117,7 @@ use hex_data::HexData;
 use trees::{GetSubtreesByIndexResponse, GetTreestateResponse, SubtreeRpcData};
 use types::{
     chain_tips::{self, GetChainTipsResponse},
+    explorer::{GetBlocksRequest, GetTransactionsRequest},
     get_block_template::{
         constants::{
             DEFAULT_SOLUTION_RATE_WINDOW_SIZE, MAX_TEMPLATE_REBUILDS, MEMPOOL_LONG_POLL_INTERVAL,
@@ -221,6 +224,9 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("stop", RpcAccess::Test),
     ("getblockcount", RpcAccess::Unauthenticated),
     ("getblocks", RpcAccess::Unauthenticated),
+    ("getblockdetails", RpcAccess::Unauthenticated),
+    ("gettransactions", RpcAccess::Unauthenticated),
+    ("gettransactiondetails", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -259,8 +265,6 @@ Either \"sapling\", \"orchard\", or \"ironwood\".";
 pub(super) const PARAM_START_INDEX_DESC: &str =
     "The index of the first 2^16-leaf subtree to return.";
 pub(super) const PARAM_LIMIT_DESC: &str = "The maximum number of records to return.";
-pub(super) const PARAM_CURSOR_DESC: &str =
-    "The opaque next-page cursor returned by an earlier getblocks call.";
 pub(super) const PARAM_REQUEST_DESC: &str = "The request object containing the parameters.";
 pub(super) const PARAM_INDEX_DESC: &str = "The index of the subtree to return.";
 pub(super) const PARAM_RAW_TRANSACTION_HEX_DESC: &str = "The hex-encoded raw transaction bytes.";
@@ -688,14 +692,48 @@ pub trait Rpc {
     ///
     /// # Parameters
     ///
-    /// - `limit`: (numeric, optional, default=5, minimum=1, maximum=100) Maximum records to return.
-    /// - `cursor`: (string, optional) Opaque `next_cursor` returned by the previous page.
+    /// - `request`: (object, optional) Cursor pagination parameters.
     #[method(name = "getblocks")]
-    async fn get_blocks(
+    async fn get_blocks(&self, request: Option<GetBlocksRequest>) -> Result<BlocksResponse>;
+
+    /// Returns complete explorer details for a canonical block from the
+    /// in-process state service and RocksDB index.
+    ///
+    /// method: post
+    /// tags: blockchain
+    ///
+    /// # Parameters
+    ///
+    /// - `hash_or_height`: (string, required) Canonical block hash or height.
+    #[method(name = "getblockdetails")]
+    async fn get_block_details(&self, hash_or_height: String) -> Result<BlockDetails>;
+
+    /// Returns a cursor-paginated, filterable page of canonical transactions
+    /// from Zakura's in-process RocksDB index.
+    ///
+    /// method: post
+    /// tags: transaction
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, optional) Cursor pagination and transaction filters.
+    #[method(name = "gettransactions")]
+    async fn get_transactions(
         &self,
-        limit: Option<u32>,
-        cursor: Option<String>,
-    ) -> Result<BlocksResponse>;
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<TransactionsResponse>;
+
+    /// Returns complete explorer details for one canonical transaction from
+    /// the in-process state service and RocksDB index.
+    ///
+    /// method: post
+    /// tags: transaction
+    ///
+    /// # Parameters
+    ///
+    /// - `txid`: (string, required) Transaction identifier in display byte order.
+    #[method(name = "gettransactiondetails")]
+    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetails>;
 
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
@@ -2914,20 +2952,92 @@ where
         best_chain_tip_height(&self.latest_chain_tip).map(|height| height.0)
     }
 
-    async fn get_blocks(
-        &self,
-        limit: Option<u32>,
-        cursor: Option<String>,
-    ) -> Result<BlocksResponse> {
+    async fn get_blocks(&self, request: Option<GetBlocksRequest>) -> Result<BlocksResponse> {
         let indexer = self
             .indexer
             .as_ref()
             .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let request = request.unwrap_or_default();
 
-        match indexer.recent_blocks(limit, cursor).await {
+        match indexer
+            .blocks_page(request.limit, request.cursor, request.direction)
+            .await
+        {
             Ok(response) => Ok(response),
             Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
                 Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+            }
+            Err(error) => Err(error).map_misc_error(),
+        }
+    }
+
+    async fn get_block_details(&self, hash_or_height: String) -> Result<BlockDetails> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let identifier =
+            HashOrHeight::new(&hash_or_height, self.latest_chain_tip.best_tip_height())
+                .map_error(server::error::LegacyCode::InvalidParameter)?;
+
+        match indexer
+            .block_details(self.read_state.clone(), identifier)
+            .await
+        {
+            Ok(Some(details)) => Ok(details),
+            Ok(None) => Err("Block not found in the best chain")
+                .map_error(server::error::LegacyCode::InvalidAddressOrKey),
+            Err(error @ zakura_indexer::Error::BlockNotIndexed(_)) => {
+                Err(error).map_error(server::error::LegacyCode::InWarmup)
+            }
+            Err(error) => Err(error).map_misc_error(),
+        }
+    }
+
+    async fn get_transactions(
+        &self,
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<TransactionsResponse> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let request = request.unwrap_or_default();
+        let query = request
+            .transaction_query()
+            .map_error(server::error::LegacyCode::InvalidParameter)?;
+
+        match indexer
+            .transactions_page(query, request.limit, request.cursor, request.direction)
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(
+                error @ (zakura_indexer::Error::InvalidCursor(_)
+                | zakura_indexer::Error::InvalidQuery(_)),
+            ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
+            Err(error) => Err(error).map_misc_error(),
+        }
+    }
+
+    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetails> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let txid = txid
+            .parse::<transaction::Hash>()
+            .map_error(server::error::LegacyCode::InvalidParameter)?;
+
+        match indexer
+            .transaction_details(self.read_state.clone(), txid)
+            .await
+        {
+            Ok(Some(details)) => Ok(details),
+            Ok(None) => Err("Transaction not found in the best chain")
+                .map_error(server::error::LegacyCode::InvalidAddressOrKey),
+            Err(error @ zakura_indexer::Error::TransactionNotIndexed(_)) => {
+                Err(error).map_error(server::error::LegacyCode::InWarmup)
             }
             Err(error) => Err(error).map_misc_error(),
         }

@@ -191,7 +191,6 @@ mod tests {
         assert_eq!(details.confirmations, 1);
         assert!(details.canonical);
         assert!(details.finalized);
-        assert_eq!(details.finality_status, "Finalized");
         assert_eq!(details.transactions.len(), block.transactions.len());
         assert!(details.transactions[0].is_coinbase);
         assert!(details.coinbase_hex.is_some());

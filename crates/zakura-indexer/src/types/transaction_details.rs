@@ -21,9 +21,6 @@ pub struct TransactionDetails {
     /// Whether the containing block is at or below the durable finalized tip.
     pub finalized: bool,
 
-    /// Explorer-facing finality label.
-    pub finality_status: String,
-
     /// Primary transaction kind.
     pub kind: TransactionKind,
 
@@ -36,15 +33,9 @@ pub struct TransactionDetails {
     /// Public boundary-flow amount in zatoshis, or `None` when the amount is private.
     pub amount_zat: Option<String>,
 
-    /// Exact decimal ZEC representation of `amount_zat`.
-    pub amount_zec: Option<String>,
-
     /// Number of Sprout JoinSplits.
     pub joinsplit_count: u32,
 
     /// Complete coinbase input script as hexadecimal bytes, when this is a coinbase transaction.
     pub coinbase_hex: Option<String>,
-
-    /// Best-effort UTF-8 rendering of the coinbase input script.
-    pub coinbase_text: Option<String>,
 }

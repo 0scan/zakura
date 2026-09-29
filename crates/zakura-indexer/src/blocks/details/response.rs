@@ -1,4 +1,4 @@
-//! Conversion of canonical state and indexed summaries into the REST contract.
+//! Conversion of canonical state and indexed summaries into the RPC contract.
 
 use std::sync::Arc;
 
@@ -11,7 +11,6 @@ use zakura_chain::{
 
 use super::{state::Details as StateDetails, value_pools};
 use crate::{
-    blocks::miner_attribution::{is_funding_stream_address, pool_metadata, PoolMetadata},
     types::{BlockDetails, BlockRecord, BlockTransaction, BlockTrees, TreeSize},
     Error,
 };
@@ -69,12 +68,6 @@ pub(super) fn assemble(
         .and_then(|transaction| transaction.inputs().first())
         .and_then(|input| input.coinbase_script());
     let coinbase_hex = coinbase_script.as_deref().map(hex::encode);
-    let coinbase_text = coinbase_script.as_deref().map(decode_coinbase_text);
-    let PoolMetadata {
-        url: miner_pool_url,
-        region: miner_pool_region,
-    } = pool_metadata(&summary.miner_pool);
-    let miner_pool_is_funding_stream = is_funding_stream_address(summary.miner_address.as_deref());
     let mut nonce = *block.header.nonce;
     nonce.reverse();
 
@@ -83,11 +76,6 @@ pub(super) fn assemble(
         confirmations: state.confirmations,
         canonical: true,
         finalized: state.finalized,
-        finality_status: if state.finalized {
-            "Finalized".to_string()
-        } else {
-            "NotYetFinalized".to_string()
-        },
         is_orphaned: false,
         version: block.header.version,
         merkle_root: block.header.merkle_root.encode_hex(),
@@ -113,24 +101,7 @@ pub(super) fn assemble(
                 .ironwood_tree
                 .map(|tree| TreeSize { size: tree.count() }),
         },
-        miner_pool_url: miner_pool_url.map(str::to_string),
-        miner_pool_region: miner_pool_region.map(str::to_string),
-        miner_pool_is_funding_stream,
         coinbase_hex,
-        coinbase_text,
         transactions,
     })
-}
-
-fn decode_coinbase_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .chars()
-        .map(|character| {
-            if character.is_control() || character == '\u{fffd}' {
-                '.'
-            } else {
-                character
-            }
-        })
-        .collect()
 }

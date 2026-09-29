@@ -2,12 +2,6 @@
 
 use zakura_chain::{parameters::Network, transaction::Transaction};
 
-/// Stable presentation metadata for a known mining pool.
-pub(super) struct PoolMetadata {
-    pub(super) url: Option<&'static str>,
-    pub(super) region: Option<&'static str>,
-}
-
 /// Returns a best-effort miner payout address and pool attribution.
 pub(super) fn identify_miner(
     coinbase: &Transaction,
@@ -95,40 +89,9 @@ fn pool_from_miner_data(data: &[u8]) -> Option<&'static str> {
     .find_map(|(tag, pool)| text.contains(tag).then_some(pool))
 }
 
-/// Returns non-consensus presentation metadata for a known pool label.
-pub(super) fn pool_metadata(pool: &str) -> PoolMetadata {
-    let (url, region) = match pool {
-        "ViaBTC" | "ViaBTC-Solo" => (Some("https://www.viabtc.com"), Some("US/CN")),
-        "F2Pool" => (Some("https://f2pool.com"), Some("HK")),
-        "Foundry USA" => (Some("https://foundrydigital.com"), Some("US")),
-        "Luxor" => (Some("https://luxor.tech"), Some("US")),
-        "2Miners" => (Some("https://2miners.com"), Some("EU")),
-        "NiceHash" => (Some("https://www.nicehash.com"), None),
-        "AntPool" => (Some("https://www.antpool.com"), Some("JP")),
-        "Kryptex" => (Some("https://www.kryptex.com"), Some("EU")),
-        "ZEC Mining Pool" => (Some("https://zecminingpool.com"), None),
-        "Mining Dutch" => (Some("https://www.mining-dutch.nl"), Some("EU")),
-        "Binance Pool" => (Some("https://pool.binance.com"), None),
-        "MySoloPool" => (Some("https://zcash.mysolopool.com"), None),
-        "Sluicey Pool" => (Some("https://sluicey.xyz/"), None),
-        "Braiins Pool" => (Some("https://braiins.com/pool"), None),
-        _ => (None, None),
-    };
-
-    PoolMetadata { url, region }
-}
-
-/// Returns true when an address is a known funding-stream recipient, not a miner.
-pub(super) fn is_funding_stream_address(address: Option<&str>) -> bool {
-    matches!(
-        address,
-        Some("t3cFfPt1Bcvgez9ZbMBFWeZsskxTkPzGCow") | Some("t2HifwjUj9uyxr9bknR8LFuQbc98c3vkXtu")
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{is_funding_stream_address, pool_from_address, pool_from_miner_data};
+    use super::{pool_from_address, pool_from_miner_data};
 
     #[test]
     fn identifies_known_pool_addresses() {
@@ -143,15 +106,5 @@ mod tests {
     fn identifies_case_insensitive_coinbase_tags() {
         assert_eq!(pool_from_miner_data(b"/ViaBTC/Mined"), Some("ViaBTC"));
         assert_eq!(pool_from_miner_data(b"no known tag"), None);
-    }
-
-    #[test]
-    fn does_not_treat_funding_stream_recipients_as_miners() {
-        assert!(is_funding_stream_address(Some(
-            "t3cFfPt1Bcvgez9ZbMBFWeZsskxTkPzGCow"
-        )));
-        assert!(!is_funding_stream_address(Some(
-            "t1MKn34KBa8Xh4g8qU8psibBXvURafphVn7"
-        )));
     }
 }

@@ -272,7 +272,7 @@ mod tests {
         assert!(!response.pagination.has_next);
 
         let transactions = indexer
-            .recent_transactions(TransactionQuery::default(), None, None, PageDirection::Next)
+            .transactions_page(TransactionQuery::default(), None, None, PageDirection::Next)
             .await
             .expect("indexed genesis transaction should be queryable");
         assert_eq!(transactions.transactions.len(), 1);
@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(indexer.indexed_block_tip().unwrap(), None);
         assert_eq!(indexer.canonical_block_hash(Height(0)).unwrap(), None);
         let transactions = indexer
-            .recent_transactions(TransactionQuery::default(), None, None, PageDirection::Next)
+            .transactions_page(TransactionQuery::default(), None, None, PageDirection::Next)
             .await
             .expect("rolled back transaction query should succeed");
         assert!(transactions.transactions.is_empty());

@@ -372,13 +372,6 @@ impl StartCmd {
         Self::validate_debug_blocksync_throughput_config(&config)?;
         config.rpc.validate().map_err(|error| eyre!(error))?;
 
-        #[cfg(not(feature = "indexer"))]
-        if config.explorer.listen_addr.is_some() {
-            return Err(eyre!(
-                "explorer.listen_addr requires zakurad to be built with the `indexer` feature"
-            ));
-        }
-
         if config.zcashd_compat.enabled {
             zcashd_compat::run_preflight(&config, self.unsafe_low_specs)?;
         }
@@ -780,22 +773,6 @@ impl StartCmd {
         #[cfg(feature = "indexer")]
         let rpc_impl = rpc_impl.with_indexer(indexer.clone());
 
-        #[cfg(feature = "indexer")]
-        let explorer_api_task_handle = {
-            let (task, _listen_addr) = zakura_indexer::api::init(
-                config.explorer.clone(),
-                indexer.clone(),
-                read_only_state_service.clone(),
-            )
-            .await
-            .map_err(|error| eyre!(error))?;
-            task
-        };
-        #[cfg(not(feature = "indexer"))]
-        let explorer_api_task_handle =
-            tokio::spawn(std::future::pending::<Result<(), tower::BoxError>>().in_current_span());
-        node_tasks.track(&explorer_api_task_handle);
-
         let node_services = ready.as_ref().map(|_| crate::node::NodeServices {
             read_state: read_only_state_service.clone(),
             latest_chain_tip: latest_chain_tip.clone(),
@@ -1059,7 +1036,6 @@ impl StartCmd {
         // ongoing tasks
         pin!(rpc_task_handle);
         pin!(admin_rpc_task_handle);
-        pin!(explorer_api_task_handle);
         pin!(indexer_rpc_task_handle);
         pin!(syncer_task_handle);
         pin!(block_gossip_task_handle);
@@ -1133,13 +1109,6 @@ impl StartCmd {
                         .expect("unexpected panic in the admin rpc task");
                     info!(?admin_rpc_server_result, "admin rpc task exited");
                     Ok(())
-                }
-
-                explorer_api_join_result = &mut explorer_api_task_handle => {
-                    let explorer_api_result = explorer_api_join_result
-                        .expect("unexpected panic in the explorer REST API task");
-                    info!(?explorer_api_result, "explorer REST API task exited");
-                    explorer_api_result.map_err(|error| eyre!(error))
                 }
 
                 rpc_tx_queue_result = &mut rpc_tx_queue_handle => {
@@ -1255,7 +1224,6 @@ impl StartCmd {
         // ongoing tasks
         rpc_task_handle.abort();
         admin_rpc_task_handle.abort();
-        explorer_api_task_handle.abort();
         rpc_tx_queue_handle.abort();
         health_task_handle.abort();
         syncer_task_handle.abort();

@@ -74,19 +74,6 @@ pub(super) fn shielded_value_balance(record: &TransactionRecord) -> Result<i64, 
     })
 }
 
-pub(super) fn format_zec(zatoshis: u64) -> String {
-    const ZATOSHIS_PER_ZEC: u64 = 100_000_000;
-
-    let whole = zatoshis / ZATOSHIS_PER_ZEC;
-    let remainder = zatoshis % ZATOSHIS_PER_ZEC;
-    if remainder == 0 {
-        return whole.to_string();
-    }
-
-    let fraction = format!("{remainder:08}");
-    format!("{whole}.{}", fraction.trim_end_matches('0'))
-}
-
 #[cfg(test)]
 mod tests {
     use zakura_chain::block::Height;
@@ -123,13 +110,6 @@ mod tests {
         record.orchard_action_count = 1;
 
         assert_eq!(shielded_pool(&record), Some(ShieldedPool::Mixed));
-    }
-
-    #[test]
-    fn formats_zatoshis_without_floating_point_rounding() {
-        assert_eq!(format_zec(3_546_720_000), "35.4672");
-        assert_eq!(format_zec(100_000_000), "1");
-        assert_eq!(format_zec(1), "0.00000001");
     }
 
     fn test_record() -> TransactionRecord {

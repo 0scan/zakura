@@ -13,12 +13,13 @@ mod sync;
 mod transactions;
 mod types;
 
-pub mod api;
-
 pub use database::DATABASE_FORMAT_VERSION;
 pub use error::Error;
 pub use indexer::Indexer;
 pub use sync::spawn_block_sync;
+pub use transactions::{
+    AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter, TransactionKindFilter, TransactionQuery,
+};
 pub use types::{
     BlockDetails, BlockRecord, BlockTransaction, BlockTransactionInput, BlockTransactionOutput,
     BlockTrees, BlocksPagination, BlocksResponse, PageDirection, ShieldedFlow, ShieldedPool,

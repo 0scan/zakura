@@ -32,6 +32,10 @@ pub enum Error {
     #[error("invalid indexer page cursor: {0}")]
     InvalidCursor(String),
 
+    /// A transaction query combined incompatible or unsupported filters.
+    #[error("invalid indexer query: {0}")]
+    InvalidQuery(String),
+
     /// State has the block, but the explorer index has not caught up to it yet.
     #[error("block is not available in the explorer index yet: {0}")]
     BlockNotIndexed(String),

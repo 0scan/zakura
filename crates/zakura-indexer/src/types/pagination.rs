@@ -11,5 +11,6 @@ pub enum PageDirection {
     #[default]
     Next,
     /// Return the immediately newer page preceding the cursor.
+    #[serde(rename = "prev")]
     Previous,
 }

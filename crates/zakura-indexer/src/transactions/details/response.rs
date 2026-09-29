@@ -16,9 +16,7 @@ use crate::{
     Error, Indexer,
 };
 
-use super::super::classify::{
-    format_zec, public_flow_amount, shielded_flow, shielded_pool, transaction_kind,
-};
+use super::super::classify::{public_flow_amount, shielded_flow, shielded_pool, transaction_kind};
 
 /// Canonical block context for one transaction response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,19 +88,12 @@ pub(super) fn build_transaction_details(
         confirmations: status.confirmations,
         canonical: true,
         finalized: status.finalized,
-        finality_status: if status.finalized {
-            "Finalized".to_string()
-        } else {
-            "NotYetFinalized".to_string()
-        },
         kind: transaction_kind(&record),
         pool: shielded_pool(&record),
         flow: shielded_flow(&record)?,
         amount_zat: amount_zat.map(|amount| amount.to_string()),
-        amount_zec: amount_zat.map(format_zec),
         joinsplit_count: record.joinsplit_count,
         coinbase_hex: coinbase_script.as_deref().map(hex::encode),
-        coinbase_text: coinbase_script.as_deref().map(decode_coinbase_text),
     })
 }
 
@@ -332,19 +323,6 @@ fn validate_indexed_record(
     }
 
     Ok(())
-}
-
-fn decode_coinbase_text(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .chars()
-        .map(|character| {
-            if character.is_control() || character == '\u{fffd}' {
-                '.'
-            } else {
-                character
-            }
-        })
-        .collect()
 }
 
 fn count_u32(value: usize, name: &str) -> Result<u32, Error> {

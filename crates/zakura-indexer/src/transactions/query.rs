@@ -19,8 +19,7 @@ use crate::{
 
 use super::{
     classify::{
-        format_zec, public_flow_amount, shielded_flow, shielded_pool, shielded_value_balance,
-        transaction_kind,
+        public_flow_amount, shielded_flow, shielded_pool, shielded_value_balance, transaction_kind,
     },
     cursor::TransactionCursor,
     disk_format::{
@@ -51,13 +50,14 @@ impl Indexer {
     }
 
     /// Returns canonical transaction summaries from newest to oldest.
-    pub(crate) async fn recent_transactions(
+    pub async fn transactions_page(
         &self,
         query: TransactionQuery,
         limit: Option<u32>,
         cursor: Option<String>,
         direction: PageDirection,
     ) -> Result<TransactionsResponse, Error> {
+        let query = query.validate().map_err(Error::InvalidQuery)?;
         let indexer = self.clone();
         tokio::task::spawn_blocking(move || {
             indexer.recent_transactions_blocking(query, limit, cursor, direction)
@@ -307,7 +307,6 @@ fn transaction_list_item(
         pool: shielded_pool(&record),
         flow: shielded_flow(&record)?,
         amount_zat: amount_zat.map(|amount| amount.to_string()),
-        amount_zec: amount_zat.map(format_zec),
         fee: record.fee_zat.to_string(),
         vin_count: record.transparent_input_count,
         vout_count: record.transparent_output_count,
@@ -357,7 +356,7 @@ mod tests {
         );
 
         let first = indexer
-            .recent_transactions(
+            .transactions_page(
                 TransactionQuery::default(),
                 Some(2),
                 None,
@@ -367,12 +366,15 @@ mod tests {
             .expect("first transaction page should load");
         assert_eq!(first.transactions.len(), 2);
         assert_eq!(first.transactions[0].block_height, "2");
-        assert_eq!(first.transactions[1].amount_zec.as_deref(), Some("20"));
+        assert_eq!(
+            first.transactions[1].amount_zat.as_deref(),
+            Some("2000000000")
+        );
         assert!(first.pagination.has_next);
         assert!(!first.pagination.has_prev);
 
         let second = indexer
-            .recent_transactions(
+            .transactions_page(
                 TransactionQuery::default(),
                 Some(2),
                 first.pagination.next_cursor.clone(),
@@ -387,7 +389,7 @@ mod tests {
         assert!(second.pagination.has_prev);
 
         let previous = indexer
-            .recent_transactions(
+            .transactions_page(
                 TransactionQuery::default(),
                 Some(2),
                 second.pagination.prev_cursor,
@@ -406,7 +408,7 @@ mod tests {
             amount: AmountFilter::AtLeastTenZec,
         };
         let shielded = indexer
-            .recent_transactions(shielded_query, None, None, PageDirection::Next)
+            .transactions_page(shielded_query, None, None, PageDirection::Next)
             .await
             .expect("shielded filter intersection should load");
         assert_eq!(shielded.transactions.len(), 1);
@@ -417,7 +419,7 @@ mod tests {
         );
 
         let mismatched_cursor = indexer
-            .recent_transactions(
+            .transactions_page(
                 shielded_query,
                 None,
                 first.pagination.next_cursor,

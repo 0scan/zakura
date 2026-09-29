@@ -152,12 +152,35 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     deprecated: false,
 },
 "getblocks" => openrpsee::openrpc::RpcMethod {
-    description: "Returns a newest-first page of explorer block summaries from Zakura\'s\nin-process RocksDB index.\n\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `limit`: (numeric, optional, default=5, minimum=1, maximum=100) Maximum records to return.\n- `cursor`: (string, optional) Opaque `next_cursor` returned by the previous page.\n",
+    description: "Returns a newest-first page of explorer block summaries from Zakura\'s\nin-process RocksDB index.\n\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `request`: (object, optional) Cursor pagination parameters.\n",
     params: |_g| vec![
-        _g.param::<u32>("limit", crate::methods::PARAM_LIMIT_DESC, false),
-        _g.param::<String>("cursor", crate::methods::PARAM_CURSOR_DESC, false),
+        _g.param::<GetBlocksRequest>("request", crate::methods::PARAM_REQUEST_DESC, false),
     ],
     result: |g| g.result::<openrpsee::openrpc::ResultType>("getblocks_result"),
+    deprecated: false,
+},
+"getblockdetails" => openrpsee::openrpc::RpcMethod {
+    description: "Returns complete explorer details for a canonical block from the\nin-process state service and RocksDB index.\n\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `hash_or_height`: (string, required) Canonical block hash or height.\n",
+    params: |_g| vec![
+        _g.param::<String>("hash_or_height", crate::methods::PARAM_HASH_OR_HEIGHT_DESC, true),
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getblockdetails_result"),
+    deprecated: false,
+},
+"gettransactions" => openrpsee::openrpc::RpcMethod {
+    description: "Returns a cursor-paginated, filterable page of canonical transactions\nfrom Zakura\'s in-process RocksDB index.\n\nmethod: post\ntags: transaction\n\n# Parameters\n\n- `request`: (object, optional) Cursor pagination and transaction filters.\n",
+    params: |_g| vec![
+        _g.param::<GetTransactionsRequest>("request", crate::methods::PARAM_REQUEST_DESC, false),
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("gettransactions_result"),
+    deprecated: false,
+},
+"gettransactiondetails" => openrpsee::openrpc::RpcMethod {
+    description: "Returns complete explorer details for one canonical transaction from\nthe in-process state service and RocksDB index.\n\nmethod: post\ntags: transaction\n\n# Parameters\n\n- `txid`: (string, required) Transaction identifier in display byte order.\n",
+    params: |_g| vec![
+        _g.param::<String>("txid", crate::methods::PARAM_TXID_DESC, true),
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("gettransactiondetails_result"),
     deprecated: false,
 },
 "getblockhash" => openrpsee::openrpc::RpcMethod {

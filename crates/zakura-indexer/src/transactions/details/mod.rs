@@ -213,6 +213,6 @@ mod tests {
         assert_eq!(json["txid"], txid.to_string());
         assert_eq!(json["tx_index"], 0);
         assert!(json.get("transaction_index").is_none());
-        assert_eq!(json["finality_status"], "Finalized");
+        assert!(json.get("finality_status").is_none());
     }
 }

@@ -79,9 +79,6 @@ pub struct TransactionListItem {
     /// Public boundary-flow amount in zatoshis, or `None` when the amount is private.
     pub amount_zat: Option<String>,
 
-    /// Exact decimal ZEC representation of `amount_zat`.
-    pub amount_zec: Option<String>,
-
     /// Exact transaction fee in zatoshis.
     pub fee: String,
 
