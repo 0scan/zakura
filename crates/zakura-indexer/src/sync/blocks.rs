@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use futures::{stream, StreamExt, TryStreamExt};
 use tokio::{task::JoinHandle, time};
 use tower::ServiceExt;
 use tracing::{info, warn};
@@ -16,6 +17,7 @@ use crate::{Error, Indexer};
 const STATE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 const BLOCK_BATCH_SIZE: u32 = 128;
+const BLOCK_INFO_CONCURRENCY: usize = 32;
 
 /// Spawns the in-process block backfill and tip reconciliation worker.
 pub fn spawn_block_sync<State, Tip>(
@@ -92,8 +94,27 @@ where
             )));
         }
 
-        let indexer_for_batch = indexer.clone();
         let indexed_count = blocks.len();
+        let blocks = stream::iter(blocks)
+            .map(|(height, block, serialized_size)| {
+                let read_state = read_state.clone();
+                async move {
+                    let response =
+                        call_state(read_state, ReadRequest::BlockInfo(height.into())).await?;
+                    let ReadResponse::BlockInfo(Some(info)) = response else {
+                        return Err(Error::StateResponse(format!(
+                            "state returned no block info at indexed height {}",
+                            height.0
+                        )));
+                    };
+                    Ok((height, block, serialized_size, *info.value_pools()))
+                }
+            })
+            .buffered(BLOCK_INFO_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let indexer_for_batch = indexer.clone();
         tokio::task::spawn_blocking(move || indexer_for_batch.index_blocks(blocks))
             .await
             .map_err(|error| Error::Task(error.to_string()))??;

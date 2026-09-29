@@ -12,11 +12,12 @@ pub(crate) enum DatabaseColumn {
     AddressRecords,
     AddressTransactionOrder,
     TransactionAddressEffects,
+    DailyStats,
     Metadata,
 }
 
 impl DatabaseColumn {
-    pub(super) const ALL: [Self; 11] = [
+    pub(super) const ALL: [Self; 12] = [
         Self::BlockRecords,
         Self::CanonicalBlockHashes,
         Self::TransparentOutputs,
@@ -27,6 +28,7 @@ impl DatabaseColumn {
         Self::AddressRecords,
         Self::AddressTransactionOrder,
         Self::TransactionAddressEffects,
+        Self::DailyStats,
         Self::Metadata,
     ];
 
@@ -42,6 +44,7 @@ impl DatabaseColumn {
             Self::AddressRecords => "address_records",
             Self::AddressTransactionOrder => "address_transaction_order",
             Self::TransactionAddressEffects => "transaction_address_effects",
+            Self::DailyStats => "daily_stats",
             Self::Metadata => "metadata",
         }
     }

@@ -1,11 +1,21 @@
 //! Atomic block record indexing and canonical-chain rollback.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use rocksdb::WriteBatch;
 use zakura_chain::{
+    amount::{Amount, NegativeAllowed, NonNegative},
     block::{Block, Height},
+    parameters::subsidy::{
+        block_subsidy, founders_reward, funding_stream_values, is_zip234_active, miner_subsidy,
+        parent_nsm_value_balance,
+    },
     transparent::{OutPoint, Utxo},
+    value_balance::ValueBalance,
+    work::difficulty::U256,
 };
 
 use super::{
@@ -19,7 +29,7 @@ use crate::{
     addresses::PendingAddressRecords,
     database::{DatabaseColumn, MetadataKey},
     models::{IndexedBlockRecord, TransactionPosition},
-    stats::BlockTransactionStats,
+    stats::{day_key, day_number, BlockTransactionStats},
     Error, Indexer,
 };
 
@@ -28,25 +38,38 @@ struct PendingBlockBatch {
     outputs: HashMap<OutPoint, Utxo>,
     addresses: PendingAddressRecords,
     chain_stats: crate::models::ChainStatsRecord,
+    daily_stats: HashMap<u32, crate::models::DailyStatsRecord>,
+    previous_block_timestamp: Option<i64>,
+    previous_pool_nsm: i64,
 }
 
 impl Indexer {
     /// Atomically derives and stores records for a contiguous block batch.
     pub(crate) fn index_blocks(
         &self,
-        blocks: Vec<(Height, Arc<Block>, usize)>,
+        blocks: Vec<(Height, Arc<Block>, usize, ValueBalance<NonNegative>)>,
     ) -> Result<(), Error> {
+        let previous = match self.indexed_block_tip()? {
+            Some((_, hash)) => self.indexed_block_record(hash)?,
+            None => None,
+        };
         let mut pending = PendingBlockBatch {
             batch: WriteBatch::default(),
             outputs: HashMap::new(),
             addresses: PendingAddressRecords::new(),
             chain_stats: self.chain_stats_record()?,
+            daily_stats: HashMap::new(),
+            previous_block_timestamp: previous.as_ref().map(|block| block.timestamp),
+            previous_pool_nsm: previous.as_ref().map_or(0, |block| block.pool_nsm),
         };
 
-        for (height, block, serialized_size) in blocks {
-            self.prepare_block(&mut pending, height, &block, serialized_size)?;
+        for (height, block, serialized_size, value_pools) in blocks {
+            self.prepare_block(&mut pending, height, &block, serialized_size, value_pools)?;
         }
         self.prepare_chain_stats_write(&mut pending.batch, pending.chain_stats)?;
+        for (day, stats) in pending.daily_stats {
+            self.prepare_daily_stats_write(&mut pending.batch, day, &stats)?;
+        }
         self.database.write(pending.batch)
     }
 
@@ -56,6 +79,7 @@ impl Indexer {
         height: Height,
         block: &Block,
         serialized_size: usize,
+        value_pools: ValueBalance<NonNegative>,
     ) -> Result<(), Error> {
         let actual_height = block.coinbase_height().ok_or_else(|| {
             Error::Calculation("indexed block is missing a coinbase height".to_string())
@@ -80,12 +104,18 @@ impl Indexer {
                 transaction,
                 &spent_utxos,
             )?;
-            transaction_stats.record(&transaction_record)?;
+            transaction_stats.record(
+                &transaction_record,
+                transaction,
+                &spent_utxos,
+                &self.network,
+            )?;
             let transaction_index_u32 = u32::try_from(transaction_index)
                 .map_err(|_| Error::Calculation("transaction index exceeds u32".to_string()))?;
             self.prepare_address_transaction(
                 &mut pending.batch,
                 &mut pending.addresses,
+                &mut pending.chain_stats.funded_transparent_address_count,
                 TransactionPosition {
                     height,
                     transaction_index: transaction_index_u32,
@@ -116,6 +146,45 @@ impl Indexer {
             .map_err(|_| Error::Calculation("block transaction count exceeds u32".to_string()))?;
         let size = u32::try_from(serialized_size)
             .map_err(|_| Error::Calculation("serialized block size exceeds u32".to_string()))?;
+        let accepted_work = block
+            .header
+            .difficulty_threshold
+            .to_work()
+            .ok_or_else(|| Error::Calculation("indexed block has an invalid target".to_string()))?
+            .as_u256();
+        if accepted_work > U256::from(u128::MAX) {
+            return Err(Error::Calculation(
+                "indexed block work exceeds the chart accumulator width".to_string(),
+            ));
+        }
+
+        let mut interval = transaction_stats.interval.clone();
+        interval.block_count = 1;
+        interval.transaction_count = u64::from(transaction_count);
+        interval.empty_block_count = u64::from(transaction_count <= 1);
+        interval.accepted_work = accepted_work.low_u128();
+        interval.total_fees_zat = u128::from(total_fees);
+        interval.total_block_size_bytes = u64::from(size);
+        interval.ironwood_active_block_count =
+            u64::from(transaction_stats.has_ironwood_transaction);
+        add_mining_accounting(
+            &mut interval,
+            block,
+            height,
+            total_fees,
+            pending.previous_pool_nsm,
+            &self.network,
+        )?;
+
+        let pool_transparent =
+            non_negative_amount(value_pools.transparent_amount(), "transparent")?;
+        let pool_sprout = non_negative_amount(value_pools.sprout_amount(), "Sprout")?;
+        let pool_sapling = non_negative_amount(value_pools.sapling_amount(), "Sapling")?;
+        let pool_orchard = non_negative_amount(value_pools.orchard_amount(), "Orchard")?;
+        let pool_deferred = non_negative_amount(value_pools.deferred_amount(), "deferred")?;
+        let pool_ironwood = non_negative_amount(value_pools.ironwood_amount(), "Ironwood")?;
+        let pool_nsm = value_pools.nsm_value_balance_amount().zatoshis();
+        let total_issuance = non_negative_amount(value_pools.issued_supply(), "issued supply")?;
 
         let model = IndexedBlockRecord {
             height,
@@ -129,6 +198,7 @@ impl Indexer {
                     .difficulty_threshold
                     .relative_to_network(&self.network)
             ),
+            accepted_work: accepted_work.low_u128(),
             miner_address,
             total_fees_zat: total_fees,
             miner_pool,
@@ -137,9 +207,29 @@ impl Indexer {
             coinbase_transaction_count: transaction_stats.coinbase,
             fully_shielded_transaction_count: transaction_stats.fully_shielded,
             mixed_pool_transaction_count: transaction_stats.mixed_pool,
+            funded_transparent_address_count: pending.chain_stats.funded_transparent_address_count,
+            pool_transparent,
+            pool_sprout,
+            pool_sapling,
+            pool_orchard,
+            pool_deferred,
+            pool_ironwood,
+            pool_nsm,
+            total_issuance,
+            interval,
         };
 
         self.add_block_to_chain_stats(&mut pending.chain_stats, &model)?;
+        let day = day_number(model.timestamp)?;
+        let daily_stats = match pending.daily_stats.entry(day) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(self.daily_stats_record(day)?.unwrap_or_default())
+            }
+        };
+        self.add_block_to_daily_stats(daily_stats, &model, hash, pending.previous_block_timestamp)?;
+        pending.previous_block_timestamp = Some(model.timestamp);
+        pending.previous_pool_nsm = model.pool_nsm;
 
         self.database.insert(
             &mut pending.batch,
@@ -177,6 +267,7 @@ impl Indexer {
         let mut batch = WriteBatch::default();
         let mut pending_address_records = PendingAddressRecords::new();
         let mut chain_stats = self.chain_stats_record()?;
+        let mut affected_days = BTreeSet::new();
 
         for raw_height in first_removed_height.0..=indexed_height.0 {
             let height = Height(raw_height);
@@ -190,10 +281,12 @@ impl Indexer {
                     "missing block record while rolling back canonical hash {hash}"
                 ))
             })?;
+            affected_days.insert(day_number(block.timestamp)?);
             self.remove_block_from_chain_stats(&mut chain_stats, &block)?;
             self.prepare_transaction_rollback(
                 &mut batch,
                 &mut pending_address_records,
+                &mut chain_stats.funded_transparent_address_count,
                 height,
                 ancestor,
             )?;
@@ -225,8 +318,64 @@ impl Indexer {
                 MetadataKey::IndexedBlockTip.as_bytes(),
             ),
         }
+        self.prepare_daily_stats_rollback(&mut batch, &affected_days, ancestor)?;
 
         self.database.write(batch)
+    }
+
+    fn prepare_daily_stats_rollback(
+        &self,
+        batch: &mut WriteBatch,
+        affected_days: &BTreeSet<u32>,
+        ancestor: Option<Height>,
+    ) -> Result<(), Error> {
+        for &day in affected_days {
+            let existing = self.daily_stats_record(day)?.ok_or_else(|| {
+                Error::CorruptData(format!("missing daily stats for UTC day {day}"))
+            })?;
+            let Some(end_height) = ancestor
+                .map(|height| height.0.min(existing.end_height))
+                .filter(|height| *height >= existing.start_height)
+            else {
+                self.database
+                    .delete(batch, DatabaseColumn::DailyStats, day_key(day));
+                continue;
+            };
+
+            let mut rebuilt = crate::models::DailyStatsRecord::default();
+            let mut previous_timestamp = match existing.start_height.checked_sub(1) {
+                Some(raw_height) => {
+                    let hash = self
+                        .canonical_block_hash(Height(raw_height))?
+                        .ok_or_else(|| {
+                            Error::CorruptData(format!(
+                                "missing canonical block before daily stats at height {raw_height}"
+                            ))
+                        })?;
+                    self.indexed_block_record(hash)?
+                        .map(|block| block.timestamp)
+                }
+                None => None,
+            };
+            for raw_height in existing.start_height..=end_height {
+                let hash = self
+                    .canonical_block_hash(Height(raw_height))?
+                    .ok_or_else(|| {
+                        Error::CorruptData(format!(
+                            "missing retained canonical block at height {raw_height}"
+                        ))
+                    })?;
+                let block = self.indexed_block_record(hash)?.ok_or_else(|| {
+                    Error::CorruptData(format!("missing retained block record for {hash}"))
+                })?;
+                if day_number(block.timestamp)? == day {
+                    self.add_block_to_daily_stats(&mut rebuilt, &block, hash, previous_timestamp)?;
+                }
+                previous_timestamp = Some(block.timestamp);
+            }
+            self.prepare_daily_stats_write(batch, day, &rebuilt)?;
+        }
+        Ok(())
     }
 
     fn spent_utxos(
@@ -300,6 +449,134 @@ impl Indexer {
     }
 }
 
+fn add_mining_accounting(
+    interval: &mut crate::models::IntervalStatsRecord,
+    block: &Block,
+    height: Height,
+    total_fees_zat: u64,
+    previous_pool_nsm: i64,
+    network: &zakura_chain::parameters::Network,
+) -> Result<(), Error> {
+    let parent_nsm = if is_zip234_active(network, height) {
+        let amount = Amount::<NegativeAllowed>::try_from(previous_pool_nsm)
+            .map_err(|error| Error::Calculation(error.to_string()))?;
+        Some(
+            parent_nsm_value_balance(amount)
+                .map_err(|error| Error::Calculation(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let subsidy = block_subsidy(height, network, parent_nsm)
+        .map_err(|error| Error::Calculation(error.to_string()))?;
+    let founder_reward = founders_reward(network, height);
+    let funding = funding_stream_values(height, network, subsidy)
+        .map_err(|error| Error::Calculation(error.to_string()))?;
+    let mut direct_funding_streams_zat = 0_u128;
+    let mut deferred_subsidy_zat = 0_u128;
+    for (receiver, value) in funding {
+        let value = u128::from(non_negative_amount(value, "funding stream")?);
+        if receiver.is_deferred() {
+            deferred_subsidy_zat =
+                checked_add_u128(deferred_subsidy_zat, value, "deferred subsidy")?;
+        } else {
+            direct_funding_streams_zat =
+                checked_add_u128(direct_funding_streams_zat, value, "direct funding streams")?;
+        }
+    }
+    let miner_subsidy = miner_subsidy(height, network, subsidy)
+        .map_err(|error| Error::Calculation(error.to_string()))?;
+
+    let coinbase = block.transactions.first().ok_or_else(|| {
+        Error::Calculation("indexed block must contain a coinbase transaction".to_string())
+    })?;
+    let transparent_output = coinbase
+        .outputs()
+        .iter()
+        .try_fold(0_u128, |total, output| {
+            checked_add_u128(
+                total,
+                u128::from(output.value().zatoshis().unsigned_abs()),
+                "coinbase transparent outputs",
+            )
+        })?;
+    let shielded_output = |value: i64, pool: &str| -> Result<u128, Error> {
+        if value > 0 {
+            return Err(Error::Calculation(format!(
+                "verified coinbase withdraws {value} zatoshis from {pool}"
+            )));
+        }
+        Ok(u128::from(value.unsigned_abs()))
+    };
+    let sapling_output = shielded_output(
+        coinbase.sapling_value_balance().sapling_amount().zatoshis(),
+        "Sapling",
+    )?;
+    let orchard_output = shielded_output(
+        coinbase.orchard_value_balance().orchard_amount().zatoshis(),
+        "Orchard",
+    )?;
+    let ironwood_output = shielded_output(
+        coinbase
+            .ironwood_value_balance()
+            .ironwood_amount()
+            .zatoshis(),
+        "Ironwood",
+    )?;
+    let observed_outputs = [
+        transparent_output,
+        sapling_output,
+        orchard_output,
+        ironwood_output,
+    ]
+    .into_iter()
+    .try_fold(0_u128, |total, value| {
+        checked_add_u128(total, value, "observed coinbase outputs")
+    })?;
+    let subsidy_zat = u128::from(non_negative_amount(subsidy, "block subsidy")?);
+    let lockbox_disbursement_zat = u128::from(non_negative_amount(
+        network.lockbox_disbursement_total_amount(height),
+        "lockbox disbursement",
+    )?);
+    let allowed_outputs = subsidy_zat
+        .checked_sub(deferred_subsidy_zat)
+        .and_then(|value| value.checked_add(u128::from(total_fees_zat)))
+        .and_then(|value| value.checked_add(lockbox_disbursement_zat))
+        .ok_or_else(|| Error::Calculation("allowed coinbase output exceeds u128".to_string()))?;
+    let unclaimed = allowed_outputs
+        .checked_sub(observed_outputs)
+        .ok_or_else(|| {
+            Error::Calculation(format!(
+                "observed coinbase output {observed_outputs} exceeds allowed output {allowed_outputs}"
+            ))
+        })?;
+
+    interval.total_subsidy_zat = subsidy_zat;
+    interval.miner_subsidy_zat = u128::from(non_negative_amount(miner_subsidy, "miner subsidy")?);
+    interval.founders_reward_zat =
+        u128::from(non_negative_amount(founder_reward, "founders reward")?);
+    interval.funding_streams_zat = direct_funding_streams_zat;
+    interval.deferred_subsidy_zat = deferred_subsidy_zat;
+    interval.lockbox_disbursement_zat = lockbox_disbursement_zat;
+    interval.coinbase_output_transparent_zat = transparent_output;
+    interval.coinbase_output_sapling_zat = sapling_output;
+    interval.coinbase_output_orchard_zat = orchard_output;
+    interval.coinbase_output_ironwood_zat = ironwood_output;
+    interval.coinbase_unclaimed_zat = unclaimed;
+    Ok(())
+}
+
+fn non_negative_amount(amount: Amount<NonNegative>, field: &str) -> Result<u64, Error> {
+    u64::try_from(amount.zatoshis())
+        .map_err(|_| Error::Calculation(format!("{field} must be non-negative")))
+}
+
+fn checked_add_u128(current: u128, value: u128, field: &str) -> Result<u128, Error> {
+    current
+        .checked_add(value)
+        .ok_or_else(|| Error::Calculation(format!("{field} exceeds u128")))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -316,7 +593,7 @@ mod tests {
 
     use crate::{
         transactions::TransactionQuery,
-        types::{PageDirection, TransactionKind},
+        types::{ChartDataRequest, PageDirection, TransactionKind},
         Indexer,
     };
 
@@ -331,6 +608,7 @@ mod tests {
                 Height(0),
                 block.clone(),
                 block.zcash_serialized_size(),
+                Default::default(),
             )])
             .expect("valid genesis block should be indexed");
         let existing = OutPoint {
@@ -364,6 +642,7 @@ mod tests {
                 Height(0),
                 block.clone(),
                 block.zcash_serialized_size(),
+                Default::default(),
             )])
             .expect("valid genesis block should be indexed");
 
@@ -407,6 +686,22 @@ mod tests {
         assert_eq!(stats.trailing_24h.shielded_transaction_count, "0");
         assert_eq!(stats.trailing_24h.coinbase_transaction_count, "1");
         assert!(stats.trailing_24h.complete);
+
+        let chart = indexer
+            .chart_data(ChartDataRequest::default())
+            .await
+            .expect("indexed chart snapshot should be queryable");
+        assert_eq!(chart.entries.len(), 1);
+        assert_eq!(chart.entries[0].height, 0);
+        assert_eq!(chart.entries[0].interval_block_count, 1);
+        assert_eq!(chart.entries[0].interval_transaction_count, 1);
+        assert_eq!(chart.entries[0].transparent_coinbase_tx_count, 1);
+        assert_eq!(chart.entries[0].interval_total_fees_zat, "0");
+        assert!(chart.entries[0]
+            .interval_accepted_work
+            .parse::<u128>()
+            .is_ok_and(|work| work > 0));
+        assert_eq!(chart.next_start_date, None);
     }
 
     #[tokio::test]
@@ -439,6 +734,7 @@ mod tests {
                 Height(0),
                 block.clone(),
                 block.zcash_serialized_size(),
+                Default::default(),
             )])
             .expect("valid address funding block should be indexed");
 
@@ -460,6 +756,12 @@ mod tests {
         assert_eq!(page.transactions[0].received_zat, "123456");
         assert_eq!(page.transactions[0].sent_zat, "0");
         assert_eq!(page.transactions[0].net_change_zat, "123456");
+
+        let chart = indexer
+            .chart_data(ChartDataRequest::default())
+            .await
+            .expect("funded-address chart snapshot should be queryable");
+        assert_eq!(chart.entries[0].funded_transparent_address_count, 1);
 
         indexer
             .rollback_blocks_to(None)
@@ -487,6 +789,7 @@ mod tests {
                 Height(0),
                 block.clone(),
                 block.zcash_serialized_size(),
+                Default::default(),
             )])
             .expect("valid genesis block should be indexed");
         indexer
@@ -515,5 +818,11 @@ mod tests {
         assert_eq!(stats.trailing_24h.shielded_transaction_count, "0");
         assert_eq!(stats.trailing_24h.coinbase_transaction_count, "0");
         assert!(stats.trailing_24h.complete);
+
+        let chart = indexer
+            .chart_data(ChartDataRequest::default())
+            .await
+            .expect("rolled-back chart query should succeed");
+        assert!(chart.entries.is_empty());
     }
 }

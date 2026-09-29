@@ -221,6 +221,14 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     result: |g| g.result::<openrpsee::openrpc::ResultType>("getnetworkstats_result"),
     deprecated: false,
 },
+"getexplorerchartdata" => openrpsee::openrpc::RpcMethod {
+    description: "Returns date-paginated daily explorer chart snapshots.\n\nmethod: post\ntags: explorer\n\n# Parameters\n\n- `request`: (object, required) Inclusive date range and page limit.\n",
+    params: |_g| vec![
+        _g.param::<ChartDataRequest>("request", crate::methods::PARAM_REQUEST_DESC, true),
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getexplorerchartdata_result"),
+    deprecated: false,
+},
 "getblockhash" => openrpsee::openrpc::RpcMethod {
     description: "Returns the hash of the block of a given height iff the index argument correspond\nto a block in the best chain.\n\nzcashd reference: [`getblockhash`](https://zcash-rpc.github.io/getblockhash.html)\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `index`: (numeric, required, example=1) The block index.\n\n# Notes\n\n- If `index` is positive then index = block height.\n- If `index` is negative then -1 is the last known valid block.\n",
     params: |_g| vec![

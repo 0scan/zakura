@@ -125,6 +125,7 @@ impl Indexer {
         &self,
         batch: &mut WriteBatch,
         pending_address_records: &mut PendingAddressRecords,
+        funded_address_count: &mut u64,
         height: Height,
         retained_tip: Option<Height>,
     ) -> Result<(), Error> {
@@ -150,6 +151,7 @@ impl Indexer {
             self.prepare_address_transaction_rollback(
                 batch,
                 pending_address_records,
+                funded_address_count,
                 position,
                 retained_tip,
             )?;

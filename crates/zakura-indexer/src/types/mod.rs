@@ -7,6 +7,7 @@ mod block;
 mod block_details;
 mod block_page;
 mod block_transaction;
+mod chart;
 mod pagination;
 mod stats;
 mod transaction;
@@ -22,6 +23,7 @@ pub use block_page::{BlocksPagination, BlocksResponse};
 pub use block_transaction::{
     BlockTransaction, BlockTransactionInput, BlockTransactionOutput, TransactionData,
 };
+pub use chart::{ChartDataEntry, ChartDataRequest, ChartDataResponse};
 pub use pagination::PageDirection;
 pub use stats::{ChainTotals, IndexerStats, RollingDayStats};
 pub use transaction::{

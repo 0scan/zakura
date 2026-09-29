@@ -84,8 +84,8 @@ use zakura_consensus::{
     funding_stream_address, router::service_trait::BlockVerifierService, RouterError,
 };
 use zakura_indexer::{
-    AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, Indexer,
-    TransactionsResponse,
+    AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, ChartDataRequest,
+    ChartDataResponse, Indexer, TransactionsResponse,
 };
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
@@ -239,6 +239,7 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("getaddresstransactions", RpcAccess::Unauthenticated),
     ("getindexerstatus", RpcAccess::Unauthenticated),
     ("getnetworkstats", RpcAccess::Unauthenticated),
+    ("getexplorerchartdata", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -802,6 +803,18 @@ pub trait Rpc {
     /// tags: explorer
     #[method(name = "getnetworkstats")]
     async fn get_network_stats(&self) -> Result<ExplorerNetworkStatsResponse>;
+
+    /// Returns date-paginated daily explorer chart snapshots.
+    ///
+    /// method: post
+    /// tags: explorer
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, required) Inclusive date range and page limit.
+    #[method(name = "getexplorerchartdata")]
+    async fn get_explorer_chart_data(&self, request: ChartDataRequest)
+        -> Result<ChartDataResponse>;
 
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
@@ -3285,6 +3298,23 @@ where
         };
 
         Ok(response)
+    }
+
+    async fn get_explorer_chart_data(
+        &self,
+        request: ChartDataRequest,
+    ) -> Result<ChartDataResponse> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        match indexer.chart_data(request).await {
+            Ok(response) => Ok(response),
+            Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {
+                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+            }
+            Err(error) => Err(error).map_misc_error(),
+        }
     }
 
     async fn get_block_hash(&self, index: i32) -> Result<GetBlockHashResponse> {

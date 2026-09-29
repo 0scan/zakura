@@ -317,6 +317,7 @@ mod tests {
             transaction_count: 1,
             serialized_size: 100,
             difficulty: "1.000000".to_string(),
+            accepted_work: 0,
             miner_address: None,
             total_fees_zat: 0,
             miner_pool: "Unknown".to_string(),
@@ -325,6 +326,16 @@ mod tests {
             coinbase_transaction_count: 1,
             fully_shielded_transaction_count: 0,
             mixed_pool_transaction_count: 0,
+            funded_transparent_address_count: 0,
+            pool_transparent: 0,
+            pool_sprout: 0,
+            pool_sapling: 0,
+            pool_orchard: 0,
+            pool_deferred: 0,
+            pool_ironwood: 0,
+            pool_nsm: 0,
+            total_issuance: 0,
+            interval: Default::default(),
         };
         let mut batch = WriteBatch::default();
         indexer.database.insert(

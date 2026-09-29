@@ -165,7 +165,12 @@ mod tests {
         let block_time = block.header.time;
         let serialized_size = block.zcash_serialized_size();
         indexer
-            .index_blocks(vec![(Height(0), block.clone(), serialized_size)])
+            .index_blocks(vec![(
+                Height(0),
+                block.clone(),
+                serialized_size,
+                Default::default(),
+            )])
             .expect("valid genesis block should be indexed");
 
         let read_state = service_fn(move |request: ReadRequest| {

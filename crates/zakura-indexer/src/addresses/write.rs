@@ -28,6 +28,7 @@ impl Indexer {
         &self,
         batch: &mut WriteBatch,
         pending_records: &mut PendingAddressRecords,
+        funded_address_count: &mut u64,
         position: TransactionPosition,
         transaction: &Transaction,
         spent_utxos: &HashMap<OutPoint, Utxo>,
@@ -46,6 +47,7 @@ impl Indexer {
 
         for effect in effects.effects {
             let current = self.pending_address_record(pending_records, effect.address)?;
+            let was_funded = current.is_some_and(is_funded);
             let updated = match current {
                 Some(mut record) => {
                     record.total_received_zat = record
@@ -79,6 +81,7 @@ impl Indexer {
                     first_funding_position: (effect.received_zat > 0).then_some(position),
                 },
             };
+            update_funded_address_count(funded_address_count, was_funded, is_funded(updated))?;
 
             self.database.insert(
                 batch,
@@ -102,6 +105,7 @@ impl Indexer {
         &self,
         batch: &mut WriteBatch,
         pending_records: &mut PendingAddressRecords,
+        funded_address_count: &mut u64,
         position: TransactionPosition,
         retained_tip: Option<Height>,
     ) -> Result<(), Error> {
@@ -118,6 +122,7 @@ impl Indexer {
                         effect.address
                     ))
                 })?;
+            let was_funded = is_funded(record);
             record.total_received_zat = record
                 .total_received_zat
                 .checked_sub(effect.received_zat)
@@ -144,6 +149,7 @@ impl Indexer {
             );
 
             if record.transaction_count == 0 {
+                update_funded_address_count(funded_address_count, was_funded, false)?;
                 self.database.delete(
                     batch,
                     DatabaseColumn::AddressRecords,
@@ -152,6 +158,8 @@ impl Indexer {
                 pending_records.insert(effect.address, None);
                 continue;
             }
+
+            update_funded_address_count(funded_address_count, was_funded, is_funded(record))?;
 
             if record.last_position == position {
                 record.last_position = self
@@ -335,6 +343,27 @@ impl Indexer {
         }
         Ok(None)
     }
+}
+
+fn is_funded(record: AddressRecord) -> bool {
+    record.total_received_zat > record.total_sent_zat
+}
+
+fn update_funded_address_count(
+    count: &mut u64,
+    was_funded: bool,
+    is_funded: bool,
+) -> Result<(), Error> {
+    *count = match (was_funded, is_funded) {
+        (false, true) => count
+            .checked_add(1)
+            .ok_or_else(|| Error::Calculation("funded address count exceeds u64".to_string()))?,
+        (true, false) => count.checked_sub(1).ok_or_else(|| {
+            Error::CorruptData("funded address count underflowed during update".to_string())
+        })?,
+        _ => *count,
+    };
+    Ok(())
 }
 
 fn non_negative_zatoshis(value: i64) -> Result<u64, Error> {
