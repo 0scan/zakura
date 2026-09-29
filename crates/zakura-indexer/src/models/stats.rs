@@ -57,6 +57,13 @@ pub(crate) struct IntervalStatsRecord {
     pub(crate) sapling_tx_count: u64,
     pub(crate) orchard_tx_count: u64,
     pub(crate) ironwood_tx_count: u64,
+    pub(crate) transparent_transaction_count: u64,
+    pub(crate) shielded_transaction_count: u64,
+    pub(crate) coinbase_transaction_count: u64,
+    pub(crate) fully_shielded_transaction_count: u64,
+    pub(crate) mixed_pool_transaction_count: u64,
+    pub(crate) sapling_spend_count: u64,
+    pub(crate) sapling_output_count: u64,
     #[serde(with = "decimal_u128")]
     pub(crate) transparent_inflow: u128,
     #[serde(with = "decimal_u128")]
@@ -65,18 +72,26 @@ pub(crate) struct IntervalStatsRecord {
     pub(crate) sprout_inflow: u128,
     #[serde(with = "decimal_u128")]
     pub(crate) sprout_outflow: u128,
+    pub(crate) sprout_inflow_transaction_count: u64,
+    pub(crate) sprout_outflow_transaction_count: u64,
     #[serde(with = "decimal_u128")]
     pub(crate) sapling_inflow: u128,
     #[serde(with = "decimal_u128")]
     pub(crate) sapling_outflow: u128,
+    pub(crate) sapling_inflow_transaction_count: u64,
+    pub(crate) sapling_outflow_transaction_count: u64,
     #[serde(with = "decimal_u128")]
     pub(crate) orchard_inflow: u128,
     #[serde(with = "decimal_u128")]
     pub(crate) orchard_outflow: u128,
+    pub(crate) orchard_inflow_transaction_count: u64,
+    pub(crate) orchard_outflow_transaction_count: u64,
     #[serde(with = "decimal_u128")]
     pub(crate) ironwood_inflow: u128,
     #[serde(with = "decimal_u128")]
     pub(crate) ironwood_outflow: u128,
+    pub(crate) ironwood_inflow_transaction_count: u64,
+    pub(crate) ironwood_outflow_transaction_count: u64,
     pub(crate) v6_transaction_count: u64,
     pub(crate) ironwood_bundle_transaction_count: u64,
     pub(crate) orchard_bundle_transaction_count: u64,

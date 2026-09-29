@@ -3258,6 +3258,13 @@ where
         let blockchain = blockchain?;
         let network_solps = network_solps?;
         let mempool = mempool?;
+        let subsidy = subsidy.ok();
+        let target_block_time_seconds = chain_tip.as_ref().and_then(|(height, _)| {
+            u64::try_from(
+                NetworkUpgrade::target_spacing_for_height(&self.network, *height).num_seconds(),
+            )
+            .ok()
+        });
         let supply = SupplyStats {
             chain_supply_zat: blockchain
                 .chain_supply()
@@ -3286,8 +3293,21 @@ where
                 difficulty: format!("{:.6}", blockchain.difficulty()),
                 network_solps: network_solps.to_string(),
                 block_reward_zat: subsidy
-                    .ok()
+                    .as_ref()
                     .map(|subsidy| subsidy.total_block_subsidy().zatoshis().to_string()),
+                miner_reward_zat: subsidy
+                    .as_ref()
+                    .map(|subsidy| subsidy.miner().zatoshis().to_string()),
+                founders_reward_zat: subsidy
+                    .as_ref()
+                    .map(|subsidy| subsidy.founders().zatoshis().to_string()),
+                funding_streams_zat: subsidy
+                    .as_ref()
+                    .map(|subsidy| subsidy.funding_streams_total().zatoshis().to_string()),
+                lockbox_zat: subsidy
+                    .as_ref()
+                    .map(|subsidy| subsidy.lockbox_total().zatoshis().to_string()),
+                target_block_time_seconds,
             },
             network: NetworkStats {
                 peer_count: self

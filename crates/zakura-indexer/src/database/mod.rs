@@ -17,7 +17,7 @@ use crate::Error;
 type DatabaseEntry = (Vec<u8>, Vec<u8>);
 
 /// On-disk format version for the rebuildable indexer database.
-pub const DATABASE_FORMAT_VERSION: u64 = 7;
+pub const DATABASE_FORMAT_VERSION: u64 = 8;
 
 /// Cloneable low-level database shared by all index domains.
 #[derive(Clone)]

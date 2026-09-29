@@ -35,6 +35,16 @@ pub struct MiningStats {
     /// This is unavailable at checkpointed heights where `getblocksubsidy`
     /// cannot calculate the historical founders' reward.
     pub block_reward_zat: Option<String>,
+    /// Current miner subsidy in zatoshis, excluding transaction fees.
+    pub miner_reward_zat: Option<String>,
+    /// Current founders' reward in zatoshis.
+    pub founders_reward_zat: Option<String>,
+    /// Current non-deferred funding stream total in zatoshis.
+    pub funding_streams_zat: Option<String>,
+    /// Current deferred funding stream total in zatoshis.
+    pub lockbox_zat: Option<String>,
+    /// Consensus target block interval at the current chain tip.
+    pub target_block_time_seconds: Option<u64>,
 }
 
 /// Current node network information.

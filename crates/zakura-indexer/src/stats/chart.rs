@@ -152,16 +152,31 @@ impl Indexer {
             sapling_tx_count: count_u32(interval.sapling_tx_count, "Sapling")?,
             orchard_tx_count: count_u32(interval.orchard_tx_count, "Orchard")?,
             ironwood_tx_count: count_u32(interval.ironwood_tx_count, "Ironwood")?,
+            interval_transparent_transaction_count: interval.transparent_transaction_count,
+            interval_shielded_transaction_count: interval.shielded_transaction_count,
+            interval_coinbase_transaction_count: interval.coinbase_transaction_count,
+            interval_fully_shielded_transaction_count: interval.fully_shielded_transaction_count,
+            interval_mixed_pool_transaction_count: interval.mixed_pool_transaction_count,
+            interval_sapling_spend_count: interval.sapling_spend_count,
+            interval_sapling_output_count: interval.sapling_output_count,
             transparent_inflow: interval.transparent_inflow.to_string(),
             transparent_outflow: interval.transparent_outflow.to_string(),
             sprout_inflow: interval.sprout_inflow.to_string(),
             sprout_outflow: interval.sprout_outflow.to_string(),
+            sprout_inflow_transaction_count: interval.sprout_inflow_transaction_count,
+            sprout_outflow_transaction_count: interval.sprout_outflow_transaction_count,
             sapling_inflow: interval.sapling_inflow.to_string(),
             sapling_outflow: interval.sapling_outflow.to_string(),
+            sapling_inflow_transaction_count: interval.sapling_inflow_transaction_count,
+            sapling_outflow_transaction_count: interval.sapling_outflow_transaction_count,
             orchard_inflow: interval.orchard_inflow.to_string(),
             orchard_outflow: interval.orchard_outflow.to_string(),
+            orchard_inflow_transaction_count: interval.orchard_inflow_transaction_count,
+            orchard_outflow_transaction_count: interval.orchard_outflow_transaction_count,
             ironwood_inflow: interval.ironwood_inflow.to_string(),
             ironwood_outflow: interval.ironwood_outflow.to_string(),
+            ironwood_inflow_transaction_count: interval.ironwood_inflow_transaction_count,
+            ironwood_outflow_transaction_count: interval.ironwood_outflow_transaction_count,
             average_block_time,
             average_block_fee_zat: average_block_fee_zat.to_string(),
             average_block_size,
@@ -268,6 +283,15 @@ mod tests {
                 end_height: height,
                 interval: crate::models::IntervalStatsRecord {
                     block_count: 1,
+                    transparent_transaction_count: u64::from(height + 4),
+                    shielded_transaction_count: u64::from(height + 5),
+                    coinbase_transaction_count: u64::from(height + 6),
+                    fully_shielded_transaction_count: u64::from(height),
+                    mixed_pool_transaction_count: u64::from(height + 1),
+                    sapling_spend_count: u64::from(height + 2),
+                    sapling_output_count: u64::from(height + 3),
+                    sapling_inflow_transaction_count: u64::from(height + 7),
+                    sapling_outflow_transaction_count: u64::from(height + 8),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -303,6 +327,18 @@ mod tests {
             first.next_start_date.as_deref(),
             Some(day_to_date(19_002).unwrap().as_str())
         );
+        assert_eq!(
+            first.entries[0].interval_fully_shielded_transaction_count,
+            10
+        );
+        assert_eq!(first.entries[0].interval_mixed_pool_transaction_count, 11);
+        assert_eq!(first.entries[0].interval_sapling_spend_count, 12);
+        assert_eq!(first.entries[0].interval_sapling_output_count, 13);
+        assert_eq!(first.entries[0].interval_transparent_transaction_count, 14);
+        assert_eq!(first.entries[0].interval_shielded_transaction_count, 15);
+        assert_eq!(first.entries[0].interval_coinbase_transaction_count, 16);
+        assert_eq!(first.entries[0].sapling_inflow_transaction_count, 17);
+        assert_eq!(first.entries[0].sapling_outflow_transaction_count, 18);
 
         let second = indexer
             .chart_data(ChartDataRequest {

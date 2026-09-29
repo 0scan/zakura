@@ -39,19 +39,63 @@ impl BlockTransactionStats {
         spent_utxos: &HashMap<OutPoint, Utxo>,
         network: &Network,
     ) -> Result<(), Error> {
-        match transaction_kind(record) {
+        let kind = transaction_kind(record);
+        match kind {
             TransactionKind::Transparent => increment(&mut self.transparent, "transparent")?,
             TransactionKind::Shielded => increment(&mut self.shielded, "shielded")?,
             TransactionKind::Coinbase => increment(&mut self.coinbase, "coinbase")?,
         }
-        if shielded_flow(record)? == Some(ShieldedFlow::FullyShielded) {
+        let is_fully_shielded = shielded_flow(record)? == Some(ShieldedFlow::FullyShielded);
+        if is_fully_shielded {
             increment(&mut self.fully_shielded, "fully shielded")?;
         }
-        if shielded_pool(record) == Some(ShieldedPool::Mixed) {
+        let is_mixed_pool = shielded_pool(record) == Some(ShieldedPool::Mixed);
+        if is_mixed_pool {
             increment(&mut self.mixed_pool, "mixed-pool")?;
         }
 
         let interval = &mut self.interval;
+        match kind {
+            TransactionKind::Transparent => add_u64(
+                &mut interval.transparent_transaction_count,
+                1,
+                "transparent transaction count",
+            )?,
+            TransactionKind::Shielded => add_u64(
+                &mut interval.shielded_transaction_count,
+                1,
+                "shielded transaction count",
+            )?,
+            TransactionKind::Coinbase => add_u64(
+                &mut interval.coinbase_transaction_count,
+                1,
+                "coinbase transaction count",
+            )?,
+        }
+        if is_fully_shielded {
+            add_u64(
+                &mut interval.fully_shielded_transaction_count,
+                1,
+                "fully shielded transaction count",
+            )?;
+        }
+        if is_mixed_pool {
+            add_u64(
+                &mut interval.mixed_pool_transaction_count,
+                1,
+                "mixed-pool transaction count",
+            )?;
+        }
+        add_u64(
+            &mut interval.sapling_spend_count,
+            u64::from(record.sapling_spend_count),
+            "Sapling spend count",
+        )?;
+        add_u64(
+            &mut interval.sapling_output_count,
+            u64::from(record.sapling_output_count),
+            "Sapling output count",
+        )?;
         let is_coinbase = transaction.is_coinbase();
         let spends_coinbase = spent_utxos.values().any(|utxo| utxo.from_coinbase);
         if !is_coinbase && spends_coinbase && transaction.has_shielded_outputs() {
@@ -348,36 +392,56 @@ fn add_transaction_flows(
         "transparent outflow",
     )?;
 
-    for value in transaction.output_values_to_sprout() {
-        add_u128(
-            &mut interval.sprout_inflow,
-            u128::from(value.zatoshis().unsigned_abs()),
-            "Sprout inflow",
-        )?;
-    }
-    for value in transaction.input_values_from_sprout() {
-        add_u128(
-            &mut interval.sprout_outflow,
-            u128::from(value.zatoshis().unsigned_abs()),
-            "Sprout outflow",
-        )?;
-    }
+    let sprout_inflow =
+        transaction
+            .output_values_to_sprout()
+            .try_fold(0_u128, |total, value| {
+                total
+                    .checked_add(u128::from(value.zatoshis().unsigned_abs()))
+                    .ok_or_else(|| Error::Calculation("Sprout inflow exceeds u128".to_string()))
+            })?;
+    let sprout_outflow =
+        transaction
+            .input_values_from_sprout()
+            .try_fold(0_u128, |total, value| {
+                total
+                    .checked_add(u128::from(value.zatoshis().unsigned_abs()))
+                    .ok_or_else(|| Error::Calculation("Sprout outflow exceeds u128".to_string()))
+            })?;
+    add_flow(
+        sprout_inflow,
+        &mut interval.sprout_inflow,
+        &mut interval.sprout_inflow_transaction_count,
+        "Sprout inflow",
+    )?;
+    add_flow(
+        sprout_outflow,
+        &mut interval.sprout_outflow,
+        &mut interval.sprout_outflow_transaction_count,
+        "Sprout outflow",
+    )?;
     add_signed_flow(
         record.sapling_value_balance_zat,
         &mut interval.sapling_inflow,
         &mut interval.sapling_outflow,
+        &mut interval.sapling_inflow_transaction_count,
+        &mut interval.sapling_outflow_transaction_count,
         "Sapling",
     )?;
     add_signed_flow(
         record.orchard_value_balance_zat,
         &mut interval.orchard_inflow,
         &mut interval.orchard_outflow,
+        &mut interval.orchard_inflow_transaction_count,
+        &mut interval.orchard_outflow_transaction_count,
         "Orchard",
     )?;
     add_signed_flow(
         record.ironwood_value_balance_zat,
         &mut interval.ironwood_inflow,
         &mut interval.ironwood_outflow,
+        &mut interval.ironwood_inflow_transaction_count,
+        &mut interval.ironwood_outflow_transaction_count,
         "Ironwood",
     )
 }
@@ -577,6 +641,21 @@ fn add_interval(
         sapling_tx_count,
         orchard_tx_count,
         ironwood_tx_count,
+        transparent_transaction_count,
+        shielded_transaction_count,
+        coinbase_transaction_count,
+        fully_shielded_transaction_count,
+        mixed_pool_transaction_count,
+        sapling_spend_count,
+        sapling_output_count,
+        sprout_inflow_transaction_count,
+        sprout_outflow_transaction_count,
+        sapling_inflow_transaction_count,
+        sapling_outflow_transaction_count,
+        orchard_inflow_transaction_count,
+        orchard_outflow_transaction_count,
+        ironwood_inflow_transaction_count,
+        ironwood_outflow_transaction_count,
         v6_transaction_count,
         ironwood_bundle_transaction_count,
         orchard_bundle_transaction_count,
@@ -630,21 +709,40 @@ fn add_signed_flow(
     value: i64,
     inflow: &mut u128,
     outflow: &mut u128,
+    inflow_transaction_count: &mut u64,
+    outflow_transaction_count: &mut u64,
     pool: &str,
 ) -> Result<(), Error> {
     if value < 0 {
-        add_u128(
-            inflow,
+        add_flow(
             u128::from(value.unsigned_abs()),
+            inflow,
+            inflow_transaction_count,
             &format!("{pool} inflow"),
         )
-    } else {
-        add_u128(
-            outflow,
+    } else if value > 0 {
+        add_flow(
             u128::from(value.unsigned_abs()),
+            outflow,
+            outflow_transaction_count,
             &format!("{pool} outflow"),
         )
+    } else {
+        Ok(())
     }
+}
+
+fn add_flow(
+    value: u128,
+    total: &mut u128,
+    transaction_count: &mut u64,
+    field: &str,
+) -> Result<(), Error> {
+    add_u128(total, value, field)?;
+    if value > 0 {
+        add_u64(transaction_count, 1, &format!("{field} transaction count"))?;
+    }
+    Ok(())
 }
 
 fn add_u64(current: &mut u64, value: u64, field: &str) -> Result<(), Error> {
@@ -659,4 +757,49 @@ fn add_u128(current: &mut u128, value: u128, field: &str) -> Result<(), Error> {
         .checked_add(value)
         .ok_or_else(|| Error::Calculation(format!("{field} exceeds u128")))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daily_interval_adds_privacy_and_sapling_protocol_counts() {
+        let mut total = crate::models::IntervalStatsRecord {
+            fully_shielded_transaction_count: 2,
+            mixed_pool_transaction_count: 3,
+            transparent_transaction_count: 4,
+            shielded_transaction_count: 6,
+            coinbase_transaction_count: 8,
+            sapling_spend_count: 5,
+            sapling_output_count: 7,
+            sapling_inflow_transaction_count: 11,
+            sapling_outflow_transaction_count: 13,
+            ..Default::default()
+        };
+        let value = crate::models::IntervalStatsRecord {
+            fully_shielded_transaction_count: 11,
+            mixed_pool_transaction_count: 13,
+            transparent_transaction_count: 17,
+            shielded_transaction_count: 19,
+            coinbase_transaction_count: 23,
+            sapling_spend_count: 17,
+            sapling_output_count: 19,
+            sapling_inflow_transaction_count: 23,
+            sapling_outflow_transaction_count: 29,
+            ..Default::default()
+        };
+
+        add_interval(&mut total, &value).expect("small interval counts should add");
+
+        assert_eq!(total.fully_shielded_transaction_count, 13);
+        assert_eq!(total.mixed_pool_transaction_count, 16);
+        assert_eq!(total.transparent_transaction_count, 21);
+        assert_eq!(total.shielded_transaction_count, 25);
+        assert_eq!(total.coinbase_transaction_count, 31);
+        assert_eq!(total.sapling_spend_count, 22);
+        assert_eq!(total.sapling_output_count, 26);
+        assert_eq!(total.sapling_inflow_transaction_count, 34);
+        assert_eq!(total.sapling_outflow_transaction_count, 42);
+    }
 }
