@@ -12,7 +12,10 @@ use zakura_chain::{
 
 use crate::{
     models::{TransactionPosition, TransactionRecord},
-    types::{BlockTransaction, BlockTransactionInput, BlockTransactionOutput, TransactionDetails},
+    types::{
+        BlockTransaction, BlockTransactionInput, BlockTransactionOutput, TransactionData,
+        TransactionDetails, TransactionStatus,
+    },
     Error, Indexer,
 };
 
@@ -85,6 +88,7 @@ pub(super) fn build_transaction_details(
 
     Ok(TransactionDetails {
         transaction: response,
+        status: TransactionStatus::Confirmed,
         confirmations: status.confirmations,
         canonical: true,
         finalized: status.finalized,
@@ -249,12 +253,9 @@ fn build_transaction(
         .zcash_serialize_to_vec()
         .map_err(|error| Error::Calculation(error.to_string()))?;
 
-    Ok(BlockTransaction {
+    let transaction = TransactionData {
         txid: txid.to_string(),
         hex: hex::encode(&serialized),
-        block_height: context.position.height.0.to_string(),
-        block_hash: context.block_hash.to_string(),
-        block_time: context.block_time.to_string(),
         size: count_u32(serialized.len(), "serialized transaction size")?,
         version: transaction.version(),
         version_group_id: transaction
@@ -285,9 +286,16 @@ fn build_transaction(
         total_input: total_input.to_string(),
         total_output: total_output.to_string(),
         is_coinbase,
-        transaction_index: context.position.transaction_index,
         inputs,
         outputs,
+    };
+
+    Ok(BlockTransaction {
+        transaction,
+        block_height: context.position.height.0.to_string(),
+        block_hash: context.block_hash.to_string(),
+        block_time: context.block_time.to_string(),
+        transaction_index: context.position.transaction_index,
     })
 }
 
@@ -297,24 +305,28 @@ fn validate_indexed_record(
     response: &BlockTransaction,
 ) -> Result<(), Error> {
     let joinsplit_count = count_u32(transaction.joinsplit_count(), "Sprout JoinSplit count")?;
-    let indexed_input_count = if response.is_coinbase {
+    let indexed_input_count = if response.transaction.is_coinbase {
         0
     } else {
-        response.vin_count
+        response.transaction.vin_count
     };
-    let matches = response.size == record.serialized_size
-        && response.fee == record.fee_zat.to_string()
+    let matches = response.transaction.size == record.serialized_size
+        && response.transaction.fee == record.fee_zat.to_string()
         && indexed_input_count == record.transparent_input_count
-        && response.vout_count == record.transparent_output_count
-        && response.value_balance_transparent == record.transparent_value_balance_zat.to_string()
-        && response.value_balance_sapling == record.sapling_value_balance_zat.to_string()
-        && response.value_balance_orchard == record.orchard_value_balance_zat.to_string()
-        && response.value_balance_ironwood == record.ironwood_value_balance_zat.to_string()
+        && response.transaction.vout_count == record.transparent_output_count
+        && response.transaction.value_balance_transparent
+            == record.transparent_value_balance_zat.to_string()
+        && response.transaction.value_balance_sapling
+            == record.sapling_value_balance_zat.to_string()
+        && response.transaction.value_balance_orchard
+            == record.orchard_value_balance_zat.to_string()
+        && response.transaction.value_balance_ironwood
+            == record.ironwood_value_balance_zat.to_string()
         && joinsplit_count == record.joinsplit_count
-        && response.sapling_spend_count == record.sapling_spend_count
-        && response.sapling_output_count == record.sapling_output_count
-        && response.orchard_actions == record.orchard_action_count
-        && response.ironwood_actions == record.ironwood_action_count;
+        && response.transaction.sapling_spend_count == record.sapling_spend_count
+        && response.transaction.sapling_output_count == record.sapling_output_count
+        && response.transaction.orchard_actions == record.orchard_action_count
+        && response.transaction.ironwood_actions == record.ironwood_action_count;
     if !matches {
         return Err(Error::CorruptData(format!(
             "indexed transaction record does not match canonical transaction {}",

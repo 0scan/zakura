@@ -85,7 +85,7 @@ use zakura_consensus::{
 };
 use zakura_indexer::{
     AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, Indexer,
-    TransactionDetails, TransactionsResponse,
+    TransactionsResponse,
 };
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
@@ -110,6 +110,7 @@ use crate::{
     },
 };
 
+mod explorer_mempool;
 pub(crate) mod hex_data;
 pub(crate) mod trees;
 pub(crate) mod types;
@@ -119,6 +120,11 @@ use trees::{GetSubtreesByIndexResponse, GetTreestateResponse, SubtreeRpcData};
 use types::{
     chain_tips::{self, GetChainTipsResponse},
     explorer::{GetAddressTransactionsRequest, GetBlocksRequest, GetTransactionsRequest},
+    explorer_mempool::{MempoolTransactionsResponse, TransactionDetailsResponse},
+    explorer_stats::{
+        BlockchainRuntimeStats, ExplorerNetworkStatsResponse, IndexerStatusResponse, MempoolStats,
+        MiningStats, NetworkStats, SupplyPoolStats, SupplyStats,
+    },
     get_block_template::{
         constants::{
             DEFAULT_SOLUTION_RATE_WINDOW_SIZE, MAX_TEMPLATE_REBUILDS, MEMPOOL_LONG_POLL_INTERVAL,
@@ -227,9 +233,12 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("getblocks", RpcAccess::Unauthenticated),
     ("getblockdetails", RpcAccess::Unauthenticated),
     ("gettransactions", RpcAccess::Unauthenticated),
+    ("getmempooltransactions", RpcAccess::Unauthenticated),
     ("gettransactiondetails", RpcAccess::Unauthenticated),
     ("getaddresssummary", RpcAccess::Unauthenticated),
     ("getaddresstransactions", RpcAccess::Unauthenticated),
+    ("getindexerstatus", RpcAccess::Unauthenticated),
+    ("getnetworkstats", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -726,8 +735,22 @@ pub trait Rpc {
         request: Option<GetTransactionsRequest>,
     ) -> Result<TransactionsResponse>;
 
-    /// Returns complete explorer details for one canonical transaction from
-    /// the in-process state service and RocksDB index.
+    /// Returns a cursor-paginated page of transactions currently in this node's mempool.
+    ///
+    /// method: post
+    /// tags: mempool
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, optional) Cursor pagination and transaction filters.
+    #[method(name = "getmempooltransactions")]
+    async fn get_mempool_transactions(
+        &self,
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<MempoolTransactionsResponse>;
+
+    /// Returns complete explorer details for one transaction from the live
+    /// mempool or, after confirmation, from the state service and RocksDB index.
     ///
     /// method: post
     /// tags: transaction
@@ -736,7 +759,7 @@ pub trait Rpc {
     ///
     /// - `txid`: (string, required) Transaction identifier in display byte order.
     #[method(name = "gettransactiondetails")]
-    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetails>;
+    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetailsResponse>;
 
     /// Returns indexed balance and general activity information for one
     /// transparent address.
@@ -764,6 +787,21 @@ pub trait Rpc {
         &self,
         request: GetAddressTransactionsRequest,
     ) -> Result<AddressTransactionsResponse>;
+
+    /// Returns explorer index catch-up progress relative to the node state tip.
+    ///
+    /// method: post
+    /// tags: explorer
+    #[method(name = "getindexerstatus")]
+    async fn get_indexer_status(&self) -> Result<IndexerStatusResponse>;
+
+    /// Returns the P0 explorer overview from persisted canonical aggregates and
+    /// live node services.
+    ///
+    /// method: post
+    /// tags: explorer
+    #[method(name = "getnetworkstats")]
+    async fn get_network_stats(&self) -> Result<ExplorerNetworkStatsResponse>;
 
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
@@ -3050,20 +3088,73 @@ where
         }
     }
 
-    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetails> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+    async fn get_mempool_transactions(
+        &self,
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<MempoolTransactionsResponse> {
+        let response =
+            call_service(self.mempool.clone(), mempool::Request::FullTransactions).await?;
+        let mempool::Response::FullTransactions {
+            transactions,
+            transaction_dependencies,
+            last_seen_tip_hash: _,
+        } = response
+        else {
+            unreachable!("unmatched response to a mempool FullTransactions request")
+        };
+        let request = request.unwrap_or_default();
+
+        match explorer_mempool::transactions_page(transactions, &transaction_dependencies, &request)
+        {
+            Ok(response) => Ok(response),
+            Err(
+                error @ (zakura_indexer::Error::InvalidCursor(_)
+                | zakura_indexer::Error::InvalidQuery(_)),
+            ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
+            Err(error) => Err(error).map_misc_error(),
+        }
+    }
+
+    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetailsResponse> {
         let txid = txid
             .parse::<transaction::Hash>()
             .map_error(server::error::LegacyCode::InvalidParameter)?;
 
+        match call_service(self.mempool.clone(), mempool::Request::FullTransactions).await {
+            Ok(mempool::Response::FullTransactions {
+                transactions,
+                transaction_dependencies,
+                last_seen_tip_hash: _,
+            }) => {
+                if let Some(transaction) = transactions
+                    .iter()
+                    .find(|transaction| transaction.transaction.id().mined_id() == txid)
+                {
+                    return explorer_mempool::transaction_details(
+                        transaction,
+                        &transactions,
+                        &transaction_dependencies,
+                        &self.network,
+                    )
+                    .map(TransactionDetailsResponse::Pending)
+                    .map_misc_error();
+                }
+            }
+            Ok(_) => unreachable!("unmatched response to a mempool FullTransactions request"),
+            Err(error) => {
+                tracing::debug!(?error, %txid, "mempool lookup failed; checking canonical index");
+            }
+        }
+
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
         match indexer
             .transaction_details(self.read_state.clone(), txid)
             .await
         {
-            Ok(Some(details)) => Ok(details),
+            Ok(Some(details)) => Ok(TransactionDetailsResponse::Confirmed(details)),
             Ok(None) => Err("Transaction not found in the best chain")
                 .map_error(server::error::LegacyCode::InvalidAddressOrKey),
             Err(error @ zakura_indexer::Error::TransactionNotIndexed(_)) => {
@@ -3105,6 +3196,95 @@ where
             }
             Err(error) => Err(error).map_misc_error(),
         }
+    }
+
+    async fn get_indexer_status(&self) -> Result<IndexerStatusResponse> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let indexed_tip = indexer.indexed_tip().await.map_misc_error()?;
+        let indexed_height = indexed_tip.map(|(height, _)| height.0.to_string());
+        let indexed_block_hash = indexed_tip.map(|(_, hash)| hash.to_string());
+        Ok(indexer_status(
+            self.latest_chain_tip.best_tip_height_and_hash(),
+            indexed_height.as_deref(),
+            indexed_block_hash.as_deref(),
+        ))
+    }
+
+    async fn get_network_stats(&self) -> Result<ExplorerNetworkStatsResponse> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let chain_tip = self.latest_chain_tip.best_tip_height_and_hash();
+        let indexer_stats = indexer.stats().await.map_misc_error()?;
+
+        let (blockchain, network_solps, mempool, subsidy) = tokio::join!(
+            self.get_blockchain_info(),
+            self.get_network_sol_ps(None, None),
+            self.get_mempool_info(),
+            self.get_block_subsidy(None),
+        );
+        let blockchain = blockchain?;
+        let network_solps = network_solps?;
+        let mempool = mempool?;
+        let supply = SupplyStats {
+            chain_supply_zat: blockchain
+                .chain_supply()
+                .chain_value_zat()
+                .zatoshis()
+                .to_string(),
+            pools: blockchain
+                .value_pools()
+                .iter()
+                .map(|pool| SupplyPoolStats {
+                    id: pool.id().clone(),
+                    balance_zat: pool.chain_value_zat().zatoshis().to_string(),
+                    monitored: pool.monitored(),
+                })
+                .collect(),
+        };
+        let response = ExplorerNetworkStatsResponse {
+            indexer: indexer_status(
+                chain_tip,
+                indexer_stats.indexed_height.as_deref(),
+                indexer_stats.indexed_block_hash.as_deref(),
+            ),
+            totals: indexer_stats.totals,
+            trailing_24h: indexer_stats.trailing_24h,
+            mining: MiningStats {
+                difficulty: format!("{:.6}", blockchain.difficulty()),
+                network_solps: network_solps.to_string(),
+                block_reward_zat: subsidy
+                    .ok()
+                    .map(|subsidy| subsidy.total_block_subsidy().zatoshis().to_string()),
+            },
+            network: NetworkStats {
+                peer_count: self
+                    .address_book
+                    .recently_live_peers(Utc::now())
+                    .len()
+                    .to_string(),
+                protocol_version: zakura_network::constants::CURRENT_NETWORK_PROTOCOL_VERSION.0,
+                node_version: self.user_agent.clone(),
+            },
+            mempool: MempoolStats {
+                transaction_count: mempool.size.to_string(),
+                bytes: mempool.bytes.to_string(),
+                memory_usage: mempool.usage.to_string(),
+            },
+            supply,
+            blockchain: BlockchainRuntimeStats {
+                state_size_bytes: blockchain.size_on_disk().to_string(),
+                verification_progress: format!("{:.6}", blockchain.verification_progress()),
+                pruned: blockchain.pruned(),
+            },
+            generated_at: Utc::now().timestamp().to_string(),
+        };
+
+        Ok(response)
     }
 
     async fn get_block_hash(&self, index: i32) -> Result<GetBlockHashResponse> {
@@ -4312,6 +4492,51 @@ fn explorer_transparent_address(
     }
 
     Ok(address)
+}
+
+fn indexer_status(
+    chain_tip: Option<(Height, block::Hash)>,
+    indexed_height: Option<&str>,
+    indexed_block_hash: Option<&str>,
+) -> IndexerStatusResponse {
+    let indexed_height_value = indexed_height.map(|height| {
+        height
+            .parse::<u64>()
+            .expect("indexer heights are generated from valid u32 values")
+    });
+    let chain_height = chain_tip.map(|(height, _)| u64::from(height.0));
+    let indexed_block_count = indexed_height_value.map_or(0, |height| height.saturating_add(1));
+    let chain_block_count = chain_height.map_or(0, |height| height.saturating_add(1));
+    let lag = chain_block_count.saturating_sub(indexed_block_count);
+    let empty_chain_progress = if indexed_block_count == 0 {
+        1_000_000
+    } else {
+        0
+    };
+    let progress_units = indexed_block_count
+        .min(chain_block_count)
+        .saturating_mul(1_000_000)
+        .checked_div(chain_block_count)
+        .unwrap_or(empty_chain_progress);
+    let synced = match (chain_tip, indexed_height_value.as_ref()) {
+        (None, None) => true,
+        (Some((height, hash)), Some(indexed_height)) => {
+            let chain_hash = hash.to_string();
+            u64::from(height.0) == *indexed_height
+                && indexed_block_hash == Some(chain_hash.as_str())
+        }
+        (None, Some(_)) | (Some(_), None) => false,
+    };
+
+    IndexerStatusResponse {
+        chain_height: chain_tip.map(|(height, _)| height.0.to_string()),
+        chain_block_hash: chain_tip.map(|(_, hash)| hash.to_string()),
+        indexed_height: indexed_height.map(ToOwned::to_owned),
+        indexed_block_hash: indexed_block_hash.map(ToOwned::to_owned),
+        lag: lag.to_string(),
+        sync_progress: format!("{}.{:04}", progress_units / 10_000, progress_units % 10_000),
+        synced,
+    }
 }
 
 /// Response to a `getinfo` RPC request.

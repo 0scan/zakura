@@ -3,6 +3,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::types::{ShieldedFlow, ShieldedPool, TransactionClassification, TransactionKind};
+
 /// Top-level transaction kind selector.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -159,6 +161,42 @@ impl TransactionQuery {
             amount,
         }
         .validate()
+    }
+
+    /// Returns whether a derived transaction classification satisfies this query.
+    pub fn matches(self, classification: TransactionClassification) -> bool {
+        let kind_matches = match self.kind {
+            TransactionKindFilter::All => true,
+            TransactionKindFilter::Shielded => classification.kind == TransactionKind::Shielded,
+            TransactionKindFilter::Transparent => {
+                classification.kind == TransactionKind::Transparent
+            }
+            TransactionKindFilter::Coinbase => classification.kind == TransactionKind::Coinbase,
+        };
+        let flow_matches = match self.flow {
+            ShieldedFlowFilter::All => true,
+            ShieldedFlowFilter::Shield => classification.flow == Some(ShieldedFlow::Shield),
+            ShieldedFlowFilter::Deshield => classification.flow == Some(ShieldedFlow::Deshield),
+            ShieldedFlowFilter::FullyShielded => {
+                classification.flow == Some(ShieldedFlow::FullyShielded)
+            }
+            ShieldedFlowFilter::Complex => classification.flow == Some(ShieldedFlow::Complex),
+        };
+        let pool_matches = match self.pool {
+            ShieldedPoolFilter::All => true,
+            ShieldedPoolFilter::Sprout => classification.pool == Some(ShieldedPool::Sprout),
+            ShieldedPoolFilter::Sapling => classification.pool == Some(ShieldedPool::Sapling),
+            ShieldedPoolFilter::Orchard => classification.pool == Some(ShieldedPool::Orchard),
+            ShieldedPoolFilter::Ironwood => classification.pool == Some(ShieldedPool::Ironwood),
+            ShieldedPoolFilter::Mixed => classification.pool == Some(ShieldedPool::Mixed),
+        };
+        let amount_matches = self.amount.minimum_zat().is_none_or(|minimum| {
+            classification
+                .amount_zat
+                .is_some_and(|amount| amount >= minimum)
+        });
+
+        kind_matches && flow_matches && pool_matches && amount_matches
     }
 
     pub(crate) fn validate(self) -> Result<Self, String> {

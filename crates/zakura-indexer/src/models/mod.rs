@@ -2,8 +2,10 @@
 
 mod address;
 mod block;
+mod stats;
 mod transaction;
 
 pub(crate) use address::{AddressEffect, AddressRecord, TransactionAddressEffects};
 pub(crate) use block::IndexedBlockRecord;
+pub(crate) use stats::ChainStatsRecord;
 pub(crate) use transaction::{TransactionPosition, TransactionRecord};

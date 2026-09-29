@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use super::{BlockTransaction, ShieldedFlow, ShieldedPool, TransactionKind};
+use super::{BlockTransaction, ShieldedFlow, ShieldedPool, TransactionKind, TransactionStatus};
 
 /// Transaction details assembled from canonical state and indexed explorer data.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
@@ -11,6 +11,9 @@ pub struct TransactionDetails {
     /// Raw transaction fields, public accounting data, and transparent inputs and outputs.
     #[serde(flatten)]
     pub transaction: BlockTransaction,
+
+    /// Canonical confirmation status.
+    pub status: TransactionStatus,
 
     /// Number of confirmations in the current best chain.
     pub confirmations: u32,

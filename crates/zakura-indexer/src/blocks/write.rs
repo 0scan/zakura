@@ -19,8 +19,16 @@ use crate::{
     addresses::PendingAddressRecords,
     database::{DatabaseColumn, MetadataKey},
     models::{IndexedBlockRecord, TransactionPosition},
+    stats::BlockTransactionStats,
     Error, Indexer,
 };
+
+struct PendingBlockBatch {
+    batch: WriteBatch,
+    outputs: HashMap<OutPoint, Utxo>,
+    addresses: PendingAddressRecords,
+    chain_stats: crate::models::ChainStatsRecord,
+}
 
 impl Indexer {
     /// Atomically derives and stores records for a contiguous block batch.
@@ -28,28 +36,23 @@ impl Indexer {
         &self,
         blocks: Vec<(Height, Arc<Block>, usize)>,
     ) -> Result<(), Error> {
-        let mut batch = WriteBatch::default();
-        let mut pending_outputs = HashMap::new();
-        let mut pending_address_records = PendingAddressRecords::new();
+        let mut pending = PendingBlockBatch {
+            batch: WriteBatch::default(),
+            outputs: HashMap::new(),
+            addresses: PendingAddressRecords::new(),
+            chain_stats: self.chain_stats_record()?,
+        };
 
         for (height, block, serialized_size) in blocks {
-            self.prepare_block(
-                &mut batch,
-                &mut pending_outputs,
-                &mut pending_address_records,
-                height,
-                &block,
-                serialized_size,
-            )?;
+            self.prepare_block(&mut pending, height, &block, serialized_size)?;
         }
-        self.database.write(batch)
+        self.prepare_chain_stats_write(&mut pending.batch, pending.chain_stats)?;
+        self.database.write(pending.batch)
     }
 
     fn prepare_block(
         &self,
-        batch: &mut WriteBatch,
-        pending_outputs: &mut HashMap<OutPoint, Utxo>,
-        pending_address_records: &mut PendingAddressRecords,
+        pending: &mut PendingBlockBatch,
         height: Height,
         block: &Block,
         serialized_size: usize,
@@ -66,21 +69,23 @@ impl Indexer {
 
         let hash = block.hash();
         let mut total_fees = 0_u64;
+        let mut transaction_stats = BlockTransactionStats::default();
 
         for (transaction_index, transaction) in block.transactions.iter().enumerate() {
-            let spent_utxos = self.spent_utxos(transaction, pending_outputs)?;
-            let fee = self.prepare_transaction(
-                batch,
+            let spent_utxos = self.spent_utxos(transaction, &pending.outputs)?;
+            let transaction_record = self.prepare_transaction(
+                &mut pending.batch,
                 height,
                 transaction_index,
                 transaction,
                 &spent_utxos,
             )?;
+            transaction_stats.record(&transaction_record)?;
             let transaction_index_u32 = u32::try_from(transaction_index)
                 .map_err(|_| Error::Calculation("transaction index exceeds u32".to_string()))?;
             self.prepare_address_transaction(
-                batch,
-                pending_address_records,
+                &mut pending.batch,
+                &mut pending.addresses,
                 TransactionPosition {
                     height,
                     transaction_index: transaction_index_u32,
@@ -90,7 +95,7 @@ impl Indexer {
             )?;
             if transaction_index > 0 {
                 total_fees = total_fees
-                    .checked_add(fee)
+                    .checked_add(transaction_record.fee_zat)
                     .ok_or_else(|| Error::Calculation("block fee total exceeds u64".to_string()))?;
             }
 
@@ -98,8 +103,8 @@ impl Indexer {
             for (output_index, output) in transaction.outputs().iter().enumerate() {
                 let outpoint = OutPoint::from_usize(transaction_hash, output_index);
                 let utxo = Utxo::from_location(output.clone(), height, transaction_index);
-                pending_outputs.insert(outpoint, utxo.clone());
-                self.prepare_transparent_output(batch, outpoint, &utxo)?;
+                pending.outputs.insert(outpoint, utxo.clone());
+                self.prepare_transparent_output(&mut pending.batch, outpoint, &utxo)?;
             }
         }
 
@@ -127,22 +132,29 @@ impl Indexer {
             miner_address,
             total_fees_zat: total_fees,
             miner_pool,
+            transparent_transaction_count: transaction_stats.transparent,
+            shielded_transaction_count: transaction_stats.shielded,
+            coinbase_transaction_count: transaction_stats.coinbase,
+            fully_shielded_transaction_count: transaction_stats.fully_shielded,
+            mixed_pool_transaction_count: transaction_stats.mixed_pool,
         };
 
+        self.add_block_to_chain_stats(&mut pending.chain_stats, &model)?;
+
         self.database.insert(
-            batch,
+            &mut pending.batch,
             DatabaseColumn::BlockRecords,
             hash.0,
             serde_json::to_vec(&model)?,
         );
         self.database.insert(
-            batch,
+            &mut pending.batch,
             DatabaseColumn::CanonicalBlockHashes,
             block_height_key(height),
             hash.0,
         );
         self.database.insert(
-            batch,
+            &mut pending.batch,
             DatabaseColumn::Metadata,
             MetadataKey::IndexedBlockTip.as_bytes(),
             indexed_block_tip_value(height, hash),
@@ -164,12 +176,25 @@ impl Indexer {
             .unwrap_or(Height::MIN);
         let mut batch = WriteBatch::default();
         let mut pending_address_records = PendingAddressRecords::new();
+        let mut chain_stats = self.chain_stats_record()?;
 
         for raw_height in first_removed_height.0..=indexed_height.0 {
+            let height = Height(raw_height);
+            let hash = self.canonical_block_hash(height)?.ok_or_else(|| {
+                Error::CorruptData(format!(
+                    "missing canonical block hash while rolling back height {raw_height}"
+                ))
+            })?;
+            let block = self.indexed_block_record(hash)?.ok_or_else(|| {
+                Error::CorruptData(format!(
+                    "missing block record while rolling back canonical hash {hash}"
+                ))
+            })?;
+            self.remove_block_from_chain_stats(&mut chain_stats, &block)?;
             self.prepare_transaction_rollback(
                 &mut batch,
                 &mut pending_address_records,
-                Height(raw_height),
+                height,
                 ancestor,
             )?;
             self.database.delete(
@@ -178,6 +203,7 @@ impl Indexer {
                 block_height_key(Height(raw_height)),
             );
         }
+        self.prepare_chain_stats_write(&mut batch, chain_stats)?;
 
         match ancestor {
             Some(height) => {
@@ -310,6 +336,21 @@ mod tests {
             block.transactions[0].hash().to_string()
         );
         assert!(!transactions.pagination.has_next);
+
+        let stats = indexer
+            .stats()
+            .await
+            .expect("indexed stats should be queryable");
+        assert_eq!(stats.indexed_height.as_deref(), Some("0"));
+        assert_eq!(stats.totals.block_count, "1");
+        assert_eq!(stats.totals.transaction_count, "1");
+        assert_eq!(stats.totals.coinbase_transaction_count, "1");
+        assert_eq!(
+            stats.totals.block_bytes,
+            block.zcash_serialized_size().to_string()
+        );
+        assert_eq!(stats.trailing_24h.block_count, "1");
+        assert!(stats.trailing_24h.complete);
     }
 
     #[tokio::test]
@@ -403,5 +444,16 @@ mod tests {
             .await
             .expect("rolled back transaction query should succeed");
         assert!(transactions.transactions.is_empty());
+
+        let stats = indexer
+            .stats()
+            .await
+            .expect("empty stats should be queryable");
+        assert_eq!(stats.indexed_height, None);
+        assert_eq!(stats.totals.block_count, "0");
+        assert_eq!(stats.totals.transaction_count, "0");
+        assert_eq!(stats.totals.coinbase_transaction_count, "0");
+        assert_eq!(stats.trailing_24h.block_count, "0");
+        assert!(stats.trailing_24h.complete);
     }
 }

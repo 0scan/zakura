@@ -3,6 +3,16 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Whether an explorer transaction is mined or currently awaiting inclusion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionStatus {
+    /// The transaction belongs to the current canonical chain.
+    Confirmed,
+    /// The transaction currently belongs to the node's mempool.
+    Pending,
+}
+
 /// The primary public-value domain used by a transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +53,21 @@ pub enum ShieldedPool {
     Ironwood,
     /// More than one shielded pool.
     Mixed,
+}
+
+/// Classification derived from transaction components and public value balance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransactionClassification {
+    /// Primary transaction kind.
+    pub kind: TransactionKind,
+    /// Shielded pool classification, when applicable.
+    pub pool: Option<ShieldedPool>,
+    /// Observable transparent/shielded boundary flow, when applicable.
+    pub flow: Option<ShieldedFlow>,
+    /// Public boundary-flow amount in zatoshis, when observable.
+    pub amount_zat: Option<u64>,
+    /// Combined shielded value balance in zatoshis.
+    pub shielded_value_balance_zat: i64,
 }
 
 /// A compact canonical transaction summary for explorer list views.

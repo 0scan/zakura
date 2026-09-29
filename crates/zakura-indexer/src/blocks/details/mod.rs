@@ -192,7 +192,7 @@ mod tests {
         assert!(details.canonical);
         assert!(details.finalized);
         assert_eq!(details.transactions.len(), block.transactions.len());
-        assert!(details.transactions[0].is_coinbase);
+        assert!(details.transactions[0].transaction.is_coinbase);
         assert!(details.coinbase_hex.is_some());
         assert!(details.chain_supply.is_some());
         assert_eq!(details.value_pools.len(), 6);

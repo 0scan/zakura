@@ -16,4 +16,9 @@ pub(crate) struct IndexedBlockRecord {
     pub(crate) miner_address: Option<String>,
     pub(crate) total_fees_zat: u64,
     pub(crate) miner_pool: String,
+    pub(crate) transparent_transaction_count: u32,
+    pub(crate) shielded_transaction_count: u32,
+    pub(crate) coinbase_transaction_count: u32,
+    pub(crate) fully_shielded_transaction_count: u32,
+    pub(crate) mixed_pool_transaction_count: u32,
 }

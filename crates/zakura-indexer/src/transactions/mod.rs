@@ -8,6 +8,7 @@ mod filter;
 mod query;
 mod write;
 
+pub use classify::classify_unmined_transaction;
 pub(crate) use classify::{shielded_flow, shielded_pool, transaction_kind};
 pub(crate) use details::build_block_transactions;
 pub use filter::{

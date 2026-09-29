@@ -8,6 +8,7 @@ mod block_details;
 mod block_page;
 mod block_transaction;
 mod pagination;
+mod stats;
 mod transaction;
 mod transaction_details;
 mod transaction_page;
@@ -18,8 +19,14 @@ pub use address_transaction_page::{AddressTransactionsPagination, AddressTransac
 pub use block::BlockRecord;
 pub use block_details::{BlockDetails, BlockTrees, TreeSize, ValuePoolBalance};
 pub use block_page::{BlocksPagination, BlocksResponse};
-pub use block_transaction::{BlockTransaction, BlockTransactionInput, BlockTransactionOutput};
+pub use block_transaction::{
+    BlockTransaction, BlockTransactionInput, BlockTransactionOutput, TransactionData,
+};
 pub use pagination::PageDirection;
-pub use transaction::{ShieldedFlow, ShieldedPool, TransactionKind, TransactionListItem};
+pub use stats::{ChainTotals, IndexerStats, RollingDayStats};
+pub use transaction::{
+    ShieldedFlow, ShieldedPool, TransactionClassification, TransactionKind, TransactionListItem,
+    TransactionStatus,
+};
 pub use transaction_details::TransactionDetails;
 pub use transaction_page::{TransactionsPagination, TransactionsResponse};

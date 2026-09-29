@@ -3,23 +3,14 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
-/// A transaction with the public accounting data needed by a block explorer.
+/// Block-independent transaction data shared by confirmed and mempool details.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-pub struct BlockTransaction {
+pub struct TransactionData {
     /// Transaction identifier in display byte order.
     pub txid: String,
 
     /// Consensus-serialized transaction bytes.
     pub hex: String,
-
-    /// Containing block height.
-    pub block_height: String,
-
-    /// Containing block hash.
-    pub block_hash: String,
-
-    /// Containing block timestamp as Unix seconds.
-    pub block_time: String,
 
     /// Consensus-serialized transaction size in bytes.
     pub size: u32,
@@ -96,18 +87,35 @@ pub struct BlockTransaction {
     /// Sum of transparent output values in zatoshis.
     pub total_output: String,
 
-    /// Whether this is the block's coinbase transaction.
+    /// Whether this is a coinbase transaction.
     pub is_coinbase: bool,
-
-    /// Zero-based transaction position within the block.
-    #[serde(rename = "tx_index")]
-    pub transaction_index: u32,
 
     /// Public transparent inputs. Coinbase input data is exposed at block level.
     pub inputs: Vec<BlockTransactionInput>,
 
     /// Public transparent outputs.
     pub outputs: Vec<BlockTransactionOutput>,
+}
+
+/// A transaction with its position in a canonical block.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+pub struct BlockTransaction {
+    /// Block-independent transaction data.
+    #[serde(flatten)]
+    pub transaction: TransactionData,
+
+    /// Containing block height.
+    pub block_height: String,
+
+    /// Containing block hash.
+    pub block_hash: String,
+
+    /// Containing block timestamp as Unix seconds.
+    pub block_time: String,
+
+    /// Zero-based transaction position within the block.
+    #[serde(rename = "tx_index")]
+    pub transaction_index: u32,
 }
 
 /// One public transparent transaction input.

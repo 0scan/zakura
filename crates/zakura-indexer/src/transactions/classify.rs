@@ -1,10 +1,105 @@
 //! Pure transaction-kind, pool, flow, and public-amount derivation.
 
+use zakura_chain::{block::Height, transaction::Transaction, transparent::Output};
+
 use crate::{
-    models::TransactionRecord,
-    types::{ShieldedFlow, ShieldedPool, TransactionKind},
+    models::{TransactionPosition, TransactionRecord},
+    types::{ShieldedFlow, ShieldedPool, TransactionClassification, TransactionKind},
     Error,
 };
+
+/// Classifies a verified non-coinbase transaction using its resolved transparent inputs.
+pub fn classify_unmined_transaction(
+    transaction: &Transaction,
+    fee_zat: u64,
+    spent_outputs: &[Output],
+) -> Result<TransactionClassification, Error> {
+    if transaction.is_coinbase() {
+        return Err(Error::Calculation(
+            "coinbase transactions cannot enter the mempool".to_string(),
+        ));
+    }
+
+    let transparent_input_count = transaction
+        .inputs()
+        .iter()
+        .filter_map(|input| input.outpoint())
+        .count();
+    if transparent_input_count != spent_outputs.len() {
+        return Err(Error::Calculation(format!(
+            "mempool transaction has {transparent_input_count} transparent inputs but {} resolved outputs",
+            spent_outputs.len()
+        )));
+    }
+
+    let total_input = spent_outputs.iter().try_fold(0_i64, |total, output| {
+        total
+            .checked_add(output.value().zatoshis())
+            .ok_or_else(|| Error::Calculation("transaction input total exceeds i64".to_string()))
+    })?;
+    let total_output = transaction
+        .outputs()
+        .iter()
+        .try_fold(0_i64, |total, output| {
+            total.checked_add(output.value().zatoshis()).ok_or_else(|| {
+                Error::Calculation("transaction output total exceeds i64".to_string())
+            })
+        })?;
+    let transparent_value_balance_zat = total_input.checked_sub(total_output).ok_or_else(|| {
+        Error::Calculation("transparent transaction value balance exceeds i64".to_string())
+    })?;
+    let record = TransactionRecord {
+        position: TransactionPosition {
+            height: Height::MIN,
+            transaction_index: 1,
+        },
+        serialized_size: 0,
+        fee_zat,
+        transparent_value_balance_zat,
+        sapling_value_balance_zat: transaction
+            .sapling_value_balance()
+            .sapling_amount()
+            .zatoshis(),
+        orchard_value_balance_zat: transaction
+            .orchard_value_balance()
+            .orchard_amount()
+            .zatoshis(),
+        ironwood_value_balance_zat: transaction
+            .ironwood_value_balance()
+            .ironwood_amount()
+            .zatoshis(),
+        transparent_input_count: count_u32(transparent_input_count, "transparent input count")?,
+        transparent_output_count: count_u32(
+            transaction.outputs().len(),
+            "transparent output count",
+        )?,
+        joinsplit_count: count_u32(transaction.joinsplit_count(), "Sprout JoinSplit count")?,
+        sapling_spend_count: count_u32(
+            transaction.sapling_spends_per_anchor().count(),
+            "Sapling spend count",
+        )?,
+        sapling_output_count: count_u32(
+            transaction.sapling_outputs().count(),
+            "Sapling output count",
+        )?,
+        orchard_action_count: count_u32(
+            transaction.orchard_actions().count(),
+            "Orchard action count",
+        )?,
+        ironwood_action_count: count_u32(
+            transaction.ironwood_actions().count(),
+            "Ironwood action count",
+        )?,
+    };
+
+    Ok(TransactionClassification {
+        kind: transaction_kind(&record),
+        pool: shielded_pool(&record),
+        flow: shielded_flow(&record)?,
+        amount_zat: public_flow_amount(&record)?,
+        shielded_value_balance_zat: shielded_value_balance(&record)?,
+    })
+}
 
 pub(crate) fn transaction_kind(record: &TransactionRecord) -> TransactionKind {
     if record.position.transaction_index == 0 {
@@ -72,6 +167,10 @@ pub(super) fn shielded_value_balance(record: &TransactionRecord) -> Result<i64, 
     i64::try_from(balance).map_err(|_| {
         Error::Calculation("shielded transaction value balance exceeds i64".to_string())
     })
+}
+
+fn count_u32(value: usize, name: &str) -> Result<u32, Error> {
+    u32::try_from(value).map_err(|_| Error::Calculation(format!("{name} exceeds u32")))
 }
 
 #[cfg(test)]

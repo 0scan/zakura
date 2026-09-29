@@ -51,6 +51,7 @@ impl DatabaseColumn {
 pub(crate) enum MetadataKey {
     FormatVersion,
     IndexedBlockTip,
+    ChainStats,
 }
 
 impl MetadataKey {
@@ -58,6 +59,7 @@ impl MetadataKey {
         match self {
             Self::FormatVersion => b"format_version",
             Self::IndexedBlockTip => b"indexed_block_tip",
+            Self::ChainStats => b"chain_stats",
         }
     }
 }

@@ -53,6 +53,26 @@ use config::mining;
 use types::long_poll::LONG_POLL_ID_LENGTH;
 
 #[test]
+fn explorer_indexer_status_compares_height_and_hash() {
+    let hash = Hash([0x51; 32]);
+    let encoded_hash = hash.to_string();
+
+    let synced = indexer_status(Some((Height(10), hash)), Some("10"), Some(&encoded_hash));
+    assert!(synced.synced);
+    assert_eq!(synced.lag, "0");
+    assert_eq!(synced.sync_progress, "100.0000");
+
+    let lagged = indexer_status(Some((Height(10), hash)), Some("9"), Some(&encoded_hash));
+    assert!(!lagged.synced);
+    assert_eq!(lagged.lag, "1");
+    assert_eq!(lagged.sync_progress, "90.9090");
+
+    let empty = indexer_status(None, None, None);
+    assert!(empty.synced);
+    assert_eq!(empty.sync_progress, "100.0000");
+}
+
+#[test]
 fn header_chain_info_exposes_mode_frontiers_and_persistent_alarms() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
         .expect("the fixed time is valid")

@@ -175,8 +175,16 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     result: |g| g.result::<openrpsee::openrpc::ResultType>("gettransactions_result"),
     deprecated: false,
 },
+"getmempooltransactions" => openrpsee::openrpc::RpcMethod {
+    description: "Returns a cursor-paginated page of transactions currently in this node\'s mempool.\n\nmethod: post\ntags: mempool\n\n# Parameters\n\n- `request`: (object, optional) Cursor pagination and transaction filters.\n",
+    params: |_g| vec![
+        _g.param::<GetTransactionsRequest>("request", crate::methods::PARAM_REQUEST_DESC, false),
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getmempooltransactions_result"),
+    deprecated: false,
+},
 "gettransactiondetails" => openrpsee::openrpc::RpcMethod {
-    description: "Returns complete explorer details for one canonical transaction from\nthe in-process state service and RocksDB index.\n\nmethod: post\ntags: transaction\n\n# Parameters\n\n- `txid`: (string, required) Transaction identifier in display byte order.\n",
+    description: "Returns complete explorer details for one transaction from the live\nmempool or, after confirmation, from the state service and RocksDB index.\n\nmethod: post\ntags: transaction\n\n# Parameters\n\n- `txid`: (string, required) Transaction identifier in display byte order.\n",
     params: |_g| vec![
         _g.param::<String>("txid", crate::methods::PARAM_TXID_DESC, true),
     ],
@@ -197,6 +205,20 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
         _g.param::<GetAddressTransactionsRequest>("request", crate::methods::PARAM_REQUEST_DESC, true),
     ],
     result: |g| g.result::<openrpsee::openrpc::ResultType>("getaddresstransactions_result"),
+    deprecated: false,
+},
+"getindexerstatus" => openrpsee::openrpc::RpcMethod {
+    description: "Returns explorer index catch-up progress relative to the node state tip.\n\nmethod: post\ntags: explorer\n",
+    params: |_g| vec![
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getindexerstatus_result"),
+    deprecated: false,
+},
+"getnetworkstats" => openrpsee::openrpc::RpcMethod {
+    description: "Returns the P0 explorer overview from persisted canonical aggregates and\nlive node services.\n\nmethod: post\ntags: explorer\n",
+    params: |_g| vec![
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getnetworkstats_result"),
     deprecated: false,
 },
 "getblockhash" => openrpsee::openrpc::RpcMethod {

@@ -143,7 +143,10 @@ mod tests {
     };
     use zakura_state::{MinedTx, ReadRequest, ReadResponse};
 
-    use crate::{types::TransactionKind, Indexer};
+    use crate::{
+        types::{TransactionKind, TransactionStatus},
+        Indexer,
+    };
 
     #[tokio::test]
     async fn assembles_canonical_transaction_details_without_an_rpc_call() {
@@ -200,9 +203,10 @@ mod tests {
             .expect("transaction details should be assembled")
             .expect("genesis transaction should exist");
 
-        assert_eq!(details.transaction.txid, txid.to_string());
+        assert_eq!(details.transaction.transaction.txid, txid.to_string());
         assert_eq!(details.transaction.block_hash, block_hash.to_string());
         assert_eq!(details.transaction.transaction_index, 0);
+        assert_eq!(details.status, TransactionStatus::Confirmed);
         assert_eq!(details.kind, TransactionKind::Coinbase);
         assert_eq!(details.confirmations, 1);
         assert!(details.canonical);

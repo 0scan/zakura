@@ -32,7 +32,7 @@ use super::{
 impl Indexer {
     /// Adds one validated transaction and every list index derived from it to `batch`.
     ///
-    /// Returns the non-negative transaction fee for aggregation into the block record.
+    /// Returns the stored record so block-level aggregates use the same authoritative facts.
     pub(crate) fn prepare_transaction(
         &self,
         batch: &mut WriteBatch,
@@ -40,7 +40,7 @@ impl Indexer {
         transaction_index: usize,
         transaction: &Transaction,
         spent_utxos: &HashMap<OutPoint, Utxo>,
-    ) -> Result<u64, Error> {
+    ) -> Result<TransactionRecord, Error> {
         let is_coinbase = transaction.is_coinbase();
         if is_coinbase != (transaction_index == 0) {
             return Err(Error::Calculation(
@@ -117,7 +117,7 @@ impl Indexer {
         };
 
         self.insert_transaction(batch, transaction.hash(), record)?;
-        Ok(fee_zat)
+        Ok(record)
     }
 
     /// Removes all canonical transaction mappings for `height` from `batch`.

@@ -443,6 +443,11 @@ mod tests {
             miner_address: None,
             total_fees_zat: 0,
             miner_pool: "Unknown".to_string(),
+            transparent_transaction_count: 0,
+            shielded_transaction_count: 0,
+            coinbase_transaction_count: 1,
+            fully_shielded_transaction_count: 0,
+            mixed_pool_transaction_count: 0,
         };
         let mut batch = WriteBatch::default();
         indexer.database.insert(
