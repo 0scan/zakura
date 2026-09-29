@@ -96,43 +96,41 @@ pub enum AmountFilter {
     /// Do not apply a public-amount threshold.
     #[default]
     Any,
-    /// Include public flows of at least 10 ZEC.
-    AtLeastTenZec,
-    /// Include public flows of at least 100 ZEC.
-    AtLeastOneHundredZec,
-    /// Include public flows of at least 1,000 ZEC.
-    AtLeastOneThousandZec,
+    /// Include public flows of at least 1,000,000,000 zatoshis.
+    AtLeastOneBillionZat,
+    /// Include public flows of at least 10,000,000,000 zatoshis.
+    AtLeastTenBillionZat,
+    /// Include public flows of at least 100,000,000,000 zatoshis.
+    AtLeastOneHundredBillionZat,
 }
 
 impl AmountFilter {
-    const ZATOSHIS_PER_ZEC: u64 = 100_000_000;
-
     pub(super) const fn tag(self) -> u8 {
         match self {
             Self::Any => 0,
-            Self::AtLeastTenZec => 1,
-            Self::AtLeastOneHundredZec => 2,
-            Self::AtLeastOneThousandZec => 3,
+            Self::AtLeastOneBillionZat => 1,
+            Self::AtLeastTenBillionZat => 2,
+            Self::AtLeastOneHundredBillionZat => 3,
         }
     }
 
     pub(super) const fn minimum_zat(self) -> Option<u64> {
         match self {
             Self::Any => None,
-            Self::AtLeastTenZec => Some(10 * Self::ZATOSHIS_PER_ZEC),
-            Self::AtLeastOneHundredZec => Some(100 * Self::ZATOSHIS_PER_ZEC),
-            Self::AtLeastOneThousandZec => Some(1_000 * Self::ZATOSHIS_PER_ZEC),
+            Self::AtLeastOneBillionZat => Some(1_000_000_000),
+            Self::AtLeastTenBillionZat => Some(10_000_000_000),
+            Self::AtLeastOneHundredBillionZat => Some(100_000_000_000),
         }
     }
 
-    /// Converts an RPC-facing ZEC threshold into an indexed amount bucket.
-    pub fn from_minimum_zec(minimum_zec: u32) -> Result<Self, String> {
-        match minimum_zec {
+    /// Converts an RPC-facing zatoshi threshold into an indexed amount bucket.
+    pub fn from_minimum_zat(minimum_zat: u64) -> Result<Self, String> {
+        match minimum_zat {
             0 => Ok(Self::Any),
-            10 => Ok(Self::AtLeastTenZec),
-            100 => Ok(Self::AtLeastOneHundredZec),
-            1_000 => Ok(Self::AtLeastOneThousandZec),
-            _ => Err("min_zec must be 0, 10, 100, or 1000".to_string()),
+            1_000_000_000 => Ok(Self::AtLeastOneBillionZat),
+            10_000_000_000 => Ok(Self::AtLeastTenBillionZat),
+            100_000_000_000 => Ok(Self::AtLeastOneHundredBillionZat),
+            _ => Err("min_zat must be 0, 1000000000, 10000000000, or 100000000000".to_string()),
         }
     }
 }
@@ -168,7 +166,7 @@ impl TransactionQuery {
             || self.pool != ShieldedPoolFilter::All
             || self.amount != AmountFilter::Any;
         if has_shielded_filter && self.kind != TransactionKindFilter::Shielded {
-            return Err("flow_type, pool, and min_zec require type=shielded".to_string());
+            return Err("flow_type, pool, and min_zat require type=shielded".to_string());
         }
 
         Ok(self)

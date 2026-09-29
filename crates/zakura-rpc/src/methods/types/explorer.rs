@@ -43,8 +43,8 @@ pub struct GetTransactionsRequest {
     /// Shielded pool filter.
     pub pool: ShieldedPoolFilter,
 
-    /// Minimum public flow amount in ZEC: 0, 10, 100, or 1000.
-    pub min_zec: u32,
+    /// Minimum public flow amount in zatoshis: 0, 1B, 10B, or 100B.
+    pub min_zat: u64,
 }
 
 impl GetTransactionsRequest {
@@ -54,7 +54,7 @@ impl GetTransactionsRequest {
             self.kind,
             self.flow,
             self.pool,
-            AmountFilter::from_minimum_zec(self.min_zec)?,
+            AmountFilter::from_minimum_zat(self.min_zat)?,
         )
     }
 }
@@ -71,7 +71,7 @@ mod tests {
             "kind": "shielded",
             "flow": "fully_shielded",
             "pool": "ironwood",
-            "min_zec": 100
+            "min_zat": 10_000_000_000_u64
         }))
         .expect("valid explorer transaction request should deserialize");
 
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn transaction_request_rejects_unsupported_filter_combinations() {
         let unsupported_amount = GetTransactionsRequest {
-            min_zec: 42,
+            min_zat: 42,
             ..Default::default()
         };
         assert!(unsupported_amount.transaction_query().is_err());

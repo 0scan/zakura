@@ -405,7 +405,7 @@ mod tests {
             kind: TransactionKindFilter::Shielded,
             flow: ShieldedFlowFilter::Shield,
             pool: ShieldedPoolFilter::Ironwood,
-            amount: AmountFilter::AtLeastTenZec,
+            amount: AmountFilter::AtLeastOneBillionZat,
         };
         let shielded = indexer
             .transactions_page(shielded_query, None, None, PageDirection::Next)

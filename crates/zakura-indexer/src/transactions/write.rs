@@ -284,9 +284,9 @@ fn amount_filters(record: TransactionRecord) -> Result<[Option<AmountFilter>; 4]
         return Ok(filters);
     };
     for (index, filter) in [
-        AmountFilter::AtLeastTenZec,
-        AmountFilter::AtLeastOneHundredZec,
-        AmountFilter::AtLeastOneThousandZec,
+        AmountFilter::AtLeastOneBillionZat,
+        AmountFilter::AtLeastTenBillionZat,
+        AmountFilter::AtLeastOneHundredBillionZat,
     ]
     .into_iter()
     .enumerate()
