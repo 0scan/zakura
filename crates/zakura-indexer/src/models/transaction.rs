@@ -1,9 +1,10 @@
 //! Compact authoritative facts stored for each canonical transaction.
 
+use serde::{Deserialize, Serialize};
 use zakura_chain::block::Height;
 
 /// A transaction's canonical position.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub(crate) struct TransactionPosition {
     pub(crate) height: Height,
     pub(crate) transaction_index: u32,

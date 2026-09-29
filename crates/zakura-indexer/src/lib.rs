@@ -4,6 +4,7 @@
 //! future explorer indexes. Synchronization reads committed data through
 //! in-process services and never depends on Zakura's JSON-RPC or gRPC listeners.
 
+mod addresses;
 mod blocks;
 mod database;
 mod error;
@@ -21,8 +22,9 @@ pub use transactions::{
     AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter, TransactionKindFilter, TransactionQuery,
 };
 pub use types::{
-    BlockDetails, BlockRecord, BlockTransaction, BlockTransactionInput, BlockTransactionOutput,
-    BlockTrees, BlocksPagination, BlocksResponse, PageDirection, ShieldedFlow, ShieldedPool,
-    TransactionDetails, TransactionKind, TransactionListItem, TransactionsPagination,
-    TransactionsResponse, TreeSize, ValuePoolBalance,
+    AddressActivity, AddressFirstFunding, AddressSummary, AddressTransactionListItem,
+    AddressTransactionsPagination, AddressTransactionsResponse, BlockDetails, BlockRecord,
+    BlockTransaction, BlockTransactionInput, BlockTransactionOutput, BlockTrees, BlocksPagination,
+    BlocksResponse, PageDirection, ShieldedFlow, ShieldedPool, TransactionDetails, TransactionKind,
+    TransactionListItem, TransactionsPagination, TransactionsResponse, TreeSize, ValuePoolBalance,
 };

@@ -9,11 +9,14 @@ pub(crate) enum DatabaseColumn {
     CanonicalTransactionPositions,
     TransactionKindOrder,
     ShieldedTransactionOrder,
+    AddressRecords,
+    AddressTransactionOrder,
+    TransactionAddressEffects,
     Metadata,
 }
 
 impl DatabaseColumn {
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::BlockRecords,
         Self::CanonicalBlockHashes,
         Self::TransparentOutputs,
@@ -21,6 +24,9 @@ impl DatabaseColumn {
         Self::CanonicalTransactionPositions,
         Self::TransactionKindOrder,
         Self::ShieldedTransactionOrder,
+        Self::AddressRecords,
+        Self::AddressTransactionOrder,
+        Self::TransactionAddressEffects,
         Self::Metadata,
     ];
 
@@ -33,6 +39,9 @@ impl DatabaseColumn {
             Self::CanonicalTransactionPositions => "canonical_transaction_positions",
             Self::TransactionKindOrder => "transaction_kind_order",
             Self::ShieldedTransactionOrder => "shielded_transaction_order",
+            Self::AddressRecords => "address_records",
+            Self::AddressTransactionOrder => "address_transaction_order",
+            Self::TransactionAddressEffects => "transaction_address_effects",
             Self::Metadata => "metadata",
         }
     }

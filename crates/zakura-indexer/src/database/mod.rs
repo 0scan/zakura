@@ -1,19 +1,23 @@
 //! Low-level ownership and atomic operations for the indexer RocksDB.
 
 mod column;
+mod position;
 
 use std::{path::Path, sync::Arc};
 
 use rocksdb::{ColumnFamilyDescriptor, Direction, IteratorMode, Options, WriteBatch, DB};
 
 pub(crate) use column::{DatabaseColumn, MetadataKey};
+pub(crate) use position::{
+    decode_trailing_transaction_position, transaction_position_bytes, TRANSACTION_POSITION_BYTES,
+};
 
 use crate::Error;
 
 type DatabaseEntry = (Vec<u8>, Vec<u8>);
 
 /// On-disk format version for the rebuildable indexer database.
-pub const DATABASE_FORMAT_VERSION: u64 = 3;
+pub const DATABASE_FORMAT_VERSION: u64 = 4;
 
 /// Cloneable low-level database shared by all index domains.
 #[derive(Clone)]

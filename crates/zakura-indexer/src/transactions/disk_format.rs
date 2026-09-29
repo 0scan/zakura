@@ -3,6 +3,10 @@
 use zakura_chain::{block::Height, transaction::Hash as TransactionHash};
 
 use crate::{
+    database::{
+        decode_trailing_transaction_position, transaction_position_bytes,
+        TRANSACTION_POSITION_BYTES,
+    },
     models::{TransactionPosition, TransactionRecord},
     types::TransactionKind,
     Error,
@@ -11,7 +15,6 @@ use crate::{
 use super::filter::{AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter};
 
 pub(super) const TRANSACTION_RECORD_BYTES: usize = 80;
-const POSITION_KEY_BYTES: usize = 8;
 const KIND_ORDER_KEY_BYTES: usize = 9;
 const SHIELDED_ORDER_KEY_BYTES: usize = 11;
 
@@ -19,31 +22,18 @@ pub(super) fn transaction_record_key(txid: TransactionHash) -> [u8; 32] {
     txid.0
 }
 
-pub(super) fn transaction_position_key(position: TransactionPosition) -> [u8; POSITION_KEY_BYTES] {
-    let mut key = [0; POSITION_KEY_BYTES];
-    key[..4].copy_from_slice(&position.height.0.to_be_bytes());
-    key[4..].copy_from_slice(&position.transaction_index.to_be_bytes());
-    key
+pub(super) fn transaction_position_key(
+    position: TransactionPosition,
+) -> [u8; TRANSACTION_POSITION_BYTES] {
+    transaction_position_bytes(position)
 }
 
 pub(super) fn transaction_height_prefix(height: Height) -> [u8; 4] {
     height.0.to_be_bytes()
 }
 
-pub(super) fn newest_transaction_position_key() -> [u8; POSITION_KEY_BYTES] {
-    [u8::MAX; POSITION_KEY_BYTES]
-}
-
-pub(super) fn decode_transaction_position_key(bytes: &[u8]) -> Result<TransactionPosition, Error> {
-    if bytes.len() != POSITION_KEY_BYTES {
-        return Err(Error::CorruptData(format!(
-            "stored transaction position key must be {POSITION_KEY_BYTES} bytes"
-        )));
-    }
-    Ok(TransactionPosition {
-        height: Height(decode_u32(&bytes[..4])?),
-        transaction_index: decode_u32(&bytes[4..])?,
-    })
+pub(super) fn newest_transaction_position_key() -> [u8; TRANSACTION_POSITION_BYTES] {
+    [u8::MAX; TRANSACTION_POSITION_BYTES]
 }
 
 pub(super) fn encode_transaction_hash(txid: TransactionHash) -> [u8; 32] {
@@ -110,12 +100,7 @@ pub(super) fn newest_shielded_order_key(
 }
 
 pub(super) fn decode_ordered_position(bytes: &[u8]) -> Result<TransactionPosition, Error> {
-    if bytes.len() < POSITION_KEY_BYTES {
-        return Err(Error::CorruptData(
-            "stored transaction order key is truncated".to_string(),
-        ));
-    }
-    decode_transaction_position_key(&bytes[bytes.len() - POSITION_KEY_BYTES..])
+    decode_trailing_transaction_position(bytes)
 }
 
 pub(super) fn encode_transaction_record(

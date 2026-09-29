@@ -36,7 +36,7 @@ const MAX_QUERY_LIMIT: u32 = 100;
 
 impl Indexer {
     /// Returns the canonical transaction hash stored at `position`.
-    pub(super) fn canonical_transaction_hash(
+    pub(crate) fn canonical_transaction_hash(
         &self,
         position: TransactionPosition,
     ) -> Result<Option<TransactionHash>, Error> {

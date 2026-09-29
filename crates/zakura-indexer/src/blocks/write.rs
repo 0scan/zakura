@@ -16,8 +16,9 @@ use super::{
     miner_attribution::identify_miner,
 };
 use crate::{
+    addresses::PendingAddressRecords,
     database::{DatabaseColumn, MetadataKey},
-    models::IndexedBlockRecord,
+    models::{IndexedBlockRecord, TransactionPosition},
     Error, Indexer,
 };
 
@@ -29,11 +30,13 @@ impl Indexer {
     ) -> Result<(), Error> {
         let mut batch = WriteBatch::default();
         let mut pending_outputs = HashMap::new();
+        let mut pending_address_records = PendingAddressRecords::new();
 
         for (height, block, serialized_size) in blocks {
             self.prepare_block(
                 &mut batch,
                 &mut pending_outputs,
+                &mut pending_address_records,
                 height,
                 &block,
                 serialized_size,
@@ -46,6 +49,7 @@ impl Indexer {
         &self,
         batch: &mut WriteBatch,
         pending_outputs: &mut HashMap<OutPoint, Utxo>,
+        pending_address_records: &mut PendingAddressRecords,
         height: Height,
         block: &Block,
         serialized_size: usize,
@@ -69,6 +73,18 @@ impl Indexer {
                 batch,
                 height,
                 transaction_index,
+                transaction,
+                &spent_utxos,
+            )?;
+            let transaction_index_u32 = u32::try_from(transaction_index)
+                .map_err(|_| Error::Calculation("transaction index exceeds u32".to_string()))?;
+            self.prepare_address_transaction(
+                batch,
+                pending_address_records,
+                TransactionPosition {
+                    height,
+                    transaction_index: transaction_index_u32,
+                },
                 transaction,
                 &spent_utxos,
             )?;
@@ -147,9 +163,15 @@ impl Indexer {
             .and_then(|height| height.next().ok())
             .unwrap_or(Height::MIN);
         let mut batch = WriteBatch::default();
+        let mut pending_address_records = PendingAddressRecords::new();
 
         for raw_height in first_removed_height.0..=indexed_height.0 {
-            self.prepare_transaction_rollback(&mut batch, Height(raw_height))?;
+            self.prepare_transaction_rollback(
+                &mut batch,
+                &mut pending_address_records,
+                Height(raw_height),
+                ancestor,
+            )?;
             self.database.delete(
                 &mut batch,
                 DatabaseColumn::CanonicalBlockHashes,
@@ -233,11 +255,16 @@ impl Indexer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use tempfile::TempDir;
     use zakura_chain::{
+        amount::{Amount, NonNegative},
         block::{genesis::regtest_genesis_block, Height},
-        parameters::{testnet::RegtestParameters, Network},
+        parameters::{testnet::RegtestParameters, Network, NetworkKind},
         serialization::ZcashSerialize,
+        transaction::Transaction,
+        transparent::{Address, Output},
     };
 
     use crate::{
@@ -283,6 +310,71 @@ mod tests {
             block.transactions[0].hash().to_string()
         );
         assert!(!transactions.pagination.has_next);
+    }
+
+    #[tokio::test]
+    async fn indexes_address_summary_and_history_without_copying_transactions() {
+        let directory = TempDir::new().expect("temporary index directory should be created");
+        let network = Network::new_regtest(RegtestParameters::default());
+        let indexer =
+            Indexer::open(directory.path(), network).expect("temporary index should open");
+        let address = Address::from_pub_key_hash(NetworkKind::Testnet, [7; 20]);
+        let value: Amount<NonNegative> = 123_456
+            .try_into()
+            .expect("test output value is within the valid monetary range");
+        let mut block = (*regtest_genesis_block()).clone();
+        let (inputs, lock_time) = match block.transactions[0].as_ref() {
+            Transaction::V1 {
+                inputs, lock_time, ..
+            } => (inputs.clone(), *lock_time),
+            _ => panic!("regtest genesis transaction should use version 1"),
+        };
+        let coinbase = Arc::new(Transaction::V1 {
+            inputs,
+            outputs: vec![Output::new(value, address.script())],
+            lock_time,
+        });
+        block.transactions = vec![coinbase];
+        let block = Arc::new(block);
+
+        indexer
+            .index_blocks(vec![(
+                Height(0),
+                block.clone(),
+                block.zcash_serialized_size(),
+            )])
+            .expect("valid address funding block should be indexed");
+
+        let summary = indexer.address_summary(address).await.unwrap();
+        assert_eq!(summary.address, address.to_string());
+        assert_eq!(summary.balance_zat, "123456");
+        assert_eq!(summary.total_received_zat, "123456");
+        assert_eq!(summary.total_sent_zat, "0");
+        assert_eq!(summary.transaction_count, "1");
+        assert!(summary.first_seen.is_some());
+        assert!(summary.last_seen.is_some());
+        assert!(summary.first_funding.as_ref().unwrap().is_coinbase);
+
+        let page = indexer
+            .address_transactions_page(address, None, None, PageDirection::Next)
+            .await
+            .unwrap();
+        assert_eq!(page.transactions.len(), 1);
+        assert_eq!(page.transactions[0].received_zat, "123456");
+        assert_eq!(page.transactions[0].sent_zat, "0");
+        assert_eq!(page.transactions[0].net_change_zat, "123456");
+
+        indexer
+            .rollback_blocks_to(None)
+            .expect("address indexes should roll back atomically");
+        let summary = indexer.address_summary(address).await.unwrap();
+        assert_eq!(summary.transaction_count, "0");
+        assert_eq!(summary.balance_zat, "0");
+        let page = indexer
+            .address_transactions_page(address, None, None, PageDirection::Next)
+            .await
+            .unwrap();
+        assert!(page.transactions.is_empty());
     }
 
     #[tokio::test]

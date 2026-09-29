@@ -47,6 +47,26 @@ pub struct GetTransactionsRequest {
     pub min_zat: u64,
 }
 
+/// Cursor pagination parameters for `getaddresstransactions`.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetAddressTransactionsRequest {
+    /// Transparent address whose canonical transaction history is requested.
+    pub address: String,
+
+    /// Maximum records to return. The indexer clamps this value to 1–100.
+    #[serde(default)]
+    pub limit: Option<u32>,
+
+    /// Opaque cursor returned by an earlier response for this address.
+    #[serde(default)]
+    pub cursor: Option<String>,
+
+    /// Direction to move relative to `cursor`.
+    #[serde(default)]
+    pub direction: PageDirection,
+}
+
 impl GetTransactionsRequest {
     /// Converts transport parameters into the indexer's validated query type.
     pub(crate) fn transaction_query(&self) -> Result<TransactionQuery, String> {
@@ -108,5 +128,25 @@ mod tests {
             }))
             .is_err()
         );
+        assert!(
+            serde_json::from_value::<GetAddressTransactionsRequest>(serde_json::json!({
+                "address": "t1example",
+                "unknown": true
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn address_transaction_request_defaults_to_newest_page() {
+        let request: GetAddressTransactionsRequest = serde_json::from_value(serde_json::json!({
+            "address": "t1example"
+        }))
+        .expect("pagination fields should be optional");
+
+        assert_eq!(request.address, "t1example");
+        assert_eq!(request.limit, None);
+        assert_eq!(request.cursor, None);
+        assert_eq!(request.direction, PageDirection::Next);
     }
 }

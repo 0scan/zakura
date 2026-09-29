@@ -6,7 +6,7 @@ use crate::{
     Error,
 };
 
-pub(super) fn transaction_kind(record: &TransactionRecord) -> TransactionKind {
+pub(crate) fn transaction_kind(record: &TransactionRecord) -> TransactionKind {
     if record.position.transaction_index == 0 {
         TransactionKind::Coinbase
     } else if shielded_pool(record).is_some() {
@@ -16,7 +16,7 @@ pub(super) fn transaction_kind(record: &TransactionRecord) -> TransactionKind {
     }
 }
 
-pub(super) fn shielded_pool(record: &TransactionRecord) -> Option<ShieldedPool> {
+pub(crate) fn shielded_pool(record: &TransactionRecord) -> Option<ShieldedPool> {
     let pools = [
         (record.joinsplit_count > 0, ShieldedPool::Sprout),
         (
@@ -37,7 +37,7 @@ pub(super) fn shielded_pool(record: &TransactionRecord) -> Option<ShieldedPool> 
     }
 }
 
-pub(super) fn shielded_flow(record: &TransactionRecord) -> Result<Option<ShieldedFlow>, Error> {
+pub(crate) fn shielded_flow(record: &TransactionRecord) -> Result<Option<ShieldedFlow>, Error> {
     if transaction_kind(record) != TransactionKind::Shielded {
         return Ok(None);
     }

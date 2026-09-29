@@ -11,6 +11,7 @@ use zakura_chain::{
 };
 
 use crate::{
+    addresses::PendingAddressRecords,
     database::DatabaseColumn,
     models::{TransactionPosition, TransactionRecord},
     types::{ShieldedFlow, ShieldedPool, TransactionKind},
@@ -123,7 +124,9 @@ impl Indexer {
     pub(crate) fn prepare_transaction_rollback(
         &self,
         batch: &mut WriteBatch,
+        pending_address_records: &mut PendingAddressRecords,
         height: Height,
+        retained_tip: Option<Height>,
     ) -> Result<(), Error> {
         let entries = self.database.scan_prefix(
             DatabaseColumn::CanonicalTransactionPositions,
@@ -144,6 +147,12 @@ impl Indexer {
                 )));
             }
 
+            self.prepare_address_transaction_rollback(
+                batch,
+                pending_address_records,
+                position,
+                retained_tip,
+            )?;
             self.delete_transaction_indexes(batch, record)?;
             self.database.delete(
                 batch,
@@ -160,7 +169,7 @@ impl Indexer {
         Ok(())
     }
 
-    pub(super) fn transaction_record(
+    pub(crate) fn transaction_record(
         &self,
         txid: TransactionHash,
     ) -> Result<Option<TransactionRecord>, Error> {

@@ -84,7 +84,8 @@ use zakura_consensus::{
     funding_stream_address, router::service_trait::BlockVerifierService, RouterError,
 };
 use zakura_indexer::{
-    BlockDetails, BlocksResponse, Indexer, TransactionDetails, TransactionsResponse,
+    AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, Indexer,
+    TransactionDetails, TransactionsResponse,
 };
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
@@ -117,7 +118,7 @@ use hex_data::HexData;
 use trees::{GetSubtreesByIndexResponse, GetTreestateResponse, SubtreeRpcData};
 use types::{
     chain_tips::{self, GetChainTipsResponse},
-    explorer::{GetBlocksRequest, GetTransactionsRequest},
+    explorer::{GetAddressTransactionsRequest, GetBlocksRequest, GetTransactionsRequest},
     get_block_template::{
         constants::{
             DEFAULT_SOLUTION_RATE_WINDOW_SIZE, MAX_TEMPLATE_REBUILDS, MEMPOOL_LONG_POLL_INTERVAL,
@@ -227,6 +228,8 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("getblockdetails", RpcAccess::Unauthenticated),
     ("gettransactions", RpcAccess::Unauthenticated),
     ("gettransactiondetails", RpcAccess::Unauthenticated),
+    ("getaddresssummary", RpcAccess::Unauthenticated),
+    ("getaddresstransactions", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -734,6 +737,33 @@ pub trait Rpc {
     /// - `txid`: (string, required) Transaction identifier in display byte order.
     #[method(name = "gettransactiondetails")]
     async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetails>;
+
+    /// Returns indexed balance and general activity information for one
+    /// transparent address.
+    ///
+    /// method: post
+    /// tags: address
+    ///
+    /// # Parameters
+    ///
+    /// - `address`: (string, required) A transparent address for this network.
+    #[method(name = "getaddresssummary")]
+    async fn get_address_summary(&self, address: String) -> Result<AddressSummary>;
+
+    /// Returns a cursor-paginated page of canonical transactions involving one
+    /// transparent address.
+    ///
+    /// method: post
+    /// tags: address
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, required) Address and cursor pagination parameters.
+    #[method(name = "getaddresstransactions")]
+    async fn get_address_transactions(
+        &self,
+        request: GetAddressTransactionsRequest,
+    ) -> Result<AddressTransactionsResponse>;
 
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
@@ -3043,6 +3073,40 @@ where
         }
     }
 
+    async fn get_address_summary(&self, address: String) -> Result<AddressSummary> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let address = explorer_transparent_address(&self.network, &address)
+            .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
+
+        indexer.address_summary(address).await.map_misc_error()
+    }
+
+    async fn get_address_transactions(
+        &self,
+        request: GetAddressTransactionsRequest,
+    ) -> Result<AddressTransactionsResponse> {
+        let indexer = self
+            .indexer
+            .as_ref()
+            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
+        let address = explorer_transparent_address(&self.network, &request.address)
+            .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
+
+        match indexer
+            .address_transactions_page(address, request.limit, request.cursor, request.direction)
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
+                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+            }
+            Err(error) => Err(error).map_misc_error(),
+        }
+    }
+
     async fn get_block_hash(&self, index: i32) -> Result<GetBlockHashResponse> {
         let read_state = self.read_state.clone();
         let latest_chain_tip = self.latest_chain_tip.clone();
@@ -4229,6 +4293,25 @@ where
     latest_chain_tip
         .best_tip_height()
         .ok_or_misc_error("No blocks in state")
+}
+
+fn explorer_transparent_address(
+    network: &Network,
+    encoded: &str,
+) -> std::result::Result<Address, String> {
+    let address = encoded
+        .parse::<Address>()
+        .map_err(|_| "invalid transparent address".to_string())?;
+    if address.network_kind() != network.kind() {
+        return Err("transparent address belongs to a different network".to_string());
+    }
+    if matches!(address, Address::Tex { .. }) {
+        return Err(
+            "TEX addresses do not identify the receiving address stored on-chain".to_string(),
+        );
+    }
+
+    Ok(address)
 }
 
 /// Response to a `getinfo` RPC request.
