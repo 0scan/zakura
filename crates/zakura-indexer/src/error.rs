@@ -29,7 +29,7 @@ pub enum Error {
     CorruptData(String),
 
     /// A page cursor was malformed or no longer points to the canonical chain.
-    #[error("invalid block page cursor: {0}")]
+    #[error("invalid indexer page cursor: {0}")]
     InvalidCursor(String),
 
     /// State has the block, but the explorer index has not caught up to it yet.

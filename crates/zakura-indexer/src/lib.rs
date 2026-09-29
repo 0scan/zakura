@@ -9,6 +9,7 @@ mod database;
 mod error;
 mod indexer;
 mod sync;
+mod transactions;
 mod types;
 
 pub mod api;
@@ -19,5 +20,6 @@ pub use indexer::Indexer;
 pub use sync::spawn_block_sync;
 pub use types::{
     BlockDetails, BlockRecord, BlockTransaction, BlockTransactionInput, BlockTransactionOutput,
-    BlockTrees, BlocksPagination, BlocksResponse, TreeSize, ValuePoolBalance,
+    BlockTrees, BlocksPagination, BlocksResponse, ShieldedFlow, ShieldedPool, TransactionKind,
+    TransactionListItem, TransactionsPagination, TransactionsResponse, TreeSize, ValuePoolBalance,
 };

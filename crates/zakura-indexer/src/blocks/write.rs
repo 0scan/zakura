@@ -64,16 +64,15 @@ impl Indexer {
         let mut total_fees = 0_u64;
 
         for (transaction_index, transaction) in block.transactions.iter().enumerate() {
+            let spent_utxos = self.spent_utxos(transaction, pending_outputs)?;
+            let fee = self.prepare_transaction(
+                batch,
+                height,
+                transaction_index,
+                transaction,
+                &spent_utxos,
+            )?;
             if transaction_index > 0 {
-                let spent_utxos = self.spent_utxos(transaction, pending_outputs)?;
-                let fee = transaction
-                    .value_balance(&spent_utxos)
-                    .map_err(|error| Error::Calculation(error.to_string()))?
-                    .remaining_transaction_value()
-                    .map_err(|error| Error::Calculation(error.to_string()))?;
-                let fee = u64::try_from(fee.zatoshis()).map_err(|_| {
-                    Error::Calculation("transaction fee must be non-negative".to_string())
-                })?;
                 total_fees = total_fees
                     .checked_add(fee)
                     .ok_or_else(|| Error::Calculation("block fee total exceeds u64".to_string()))?;
@@ -151,6 +150,7 @@ impl Indexer {
         let mut batch = WriteBatch::default();
 
         for raw_height in first_removed_height.0..=indexed_height.0 {
+            self.prepare_transaction_rollback(&mut batch, Height(raw_height))?;
             self.database.delete(
                 &mut batch,
                 DatabaseColumn::CanonicalBlockHashes,
@@ -241,7 +241,7 @@ mod tests {
         serialization::ZcashSerialize,
     };
 
-    use crate::Indexer;
+    use crate::{transactions::TransactionQuery, types::TransactionKind, Indexer};
 
     #[tokio::test]
     async fn indexes_a_real_block_into_the_explorer_response() {
@@ -267,10 +267,23 @@ mod tests {
         assert_eq!(response.blocks[0].total_fees, "0");
         assert_eq!(response.pagination.total, "1");
         assert!(!response.pagination.has_more);
+
+        let transactions = indexer
+            .recent_transactions(TransactionQuery::default(), None, None)
+            .await
+            .expect("indexed genesis transaction should be queryable");
+        assert_eq!(transactions.transactions.len(), 1);
+        assert_eq!(transactions.transactions[0].kind, TransactionKind::Coinbase);
+        assert_eq!(transactions.transactions[0].block_height, "0");
+        assert_eq!(
+            transactions.transactions[0].txid,
+            block.transactions[0].hash().to_string()
+        );
+        assert!(!transactions.pagination.has_more);
     }
 
-    #[test]
-    fn rollback_without_an_ancestor_clears_the_canonical_block_tip() {
+    #[tokio::test]
+    async fn rollback_without_an_ancestor_clears_canonical_blocks_and_transactions() {
         let directory = TempDir::new().expect("temporary index directory should be created");
         let network = Network::new_regtest(RegtestParameters::default());
         let indexer =
@@ -290,5 +303,10 @@ mod tests {
 
         assert_eq!(indexer.indexed_block_tip().unwrap(), None);
         assert_eq!(indexer.canonical_block_hash(Height(0)).unwrap(), None);
+        let transactions = indexer
+            .recent_transactions(TransactionQuery::default(), None, None)
+            .await
+            .expect("rolled back transaction query should succeed");
+        assert!(transactions.transactions.is_empty());
     }
 }

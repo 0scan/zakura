@@ -1,6 +1,7 @@
 //! Versioned explorer REST routes.
 
 mod blocks;
+mod transactions;
 
 use std::convert::Infallible;
 
@@ -12,6 +13,7 @@ use crate::Indexer;
 use super::response::{self, ApiResponse};
 
 const BLOCKS_PATH: &str = "/api/v1/blocks";
+const TRANSACTIONS_PATH: &str = "/api/v1/transactions";
 
 pub(super) async fn handle<B, State>(
     request: Request<B>,
@@ -29,11 +31,15 @@ where
     let response = match (request.method(), path, block_identifier) {
         (&Method::GET, BLOCKS_PATH, _) => blocks::get(request.uri().query(), indexer).await,
         (&Method::OPTIONS, BLOCKS_PATH, _) => response::empty(StatusCode::NO_CONTENT),
+        (&Method::GET, TRANSACTIONS_PATH, _) => {
+            transactions::get(request.uri().query(), indexer).await
+        }
+        (&Method::OPTIONS, TRANSACTIONS_PATH, _) => response::empty(StatusCode::NO_CONTENT),
         (&Method::GET, _, Some(identifier)) => {
             blocks::get_details(identifier, indexer, read_state).await
         }
         (&Method::OPTIONS, _, Some(_)) => response::empty(StatusCode::NO_CONTENT),
-        (_, BLOCKS_PATH, _) | (_, _, Some(_)) => response::error(
+        (_, BLOCKS_PATH, _) | (_, TRANSACTIONS_PATH, _) | (_, _, Some(_)) => response::error(
             StatusCode::METHOD_NOT_ALLOWED,
             "only GET and OPTIONS are supported for this route",
         ),
@@ -91,8 +97,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn returns_an_empty_transaction_page_as_json() {
+        let response = request("/api/v1/transactions?limit=25&type=shielded").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("test response body should be readable")
+            .to_bytes();
+        let body: Value = serde_json::from_slice(&body).expect("response should contain JSON");
+        assert_eq!(body["transactions"], serde_json::json!([]));
+        assert_eq!(body["pagination"]["limit"], 25);
+        assert_eq!(body["pagination"]["hasMore"], false);
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_transaction_filters() {
+        let response = request("/api/v1/transactions?type=all&pool=ironwood").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn returns_not_found_for_unknown_routes() {
-        let response = request("/api/v1/transactions").await;
+        let response = request("/api/v1/not-a-route").await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 

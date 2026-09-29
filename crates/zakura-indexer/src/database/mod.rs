@@ -4,14 +4,16 @@ mod column;
 
 use std::{path::Path, sync::Arc};
 
-use rocksdb::{ColumnFamilyDescriptor, Options, WriteBatch, DB};
+use rocksdb::{ColumnFamilyDescriptor, Direction, IteratorMode, Options, WriteBatch, DB};
 
 pub(crate) use column::{DatabaseColumn, MetadataKey};
 
 use crate::Error;
 
+type DatabaseEntry = (Vec<u8>, Vec<u8>);
+
 /// On-disk format version for the rebuildable indexer database.
-pub const DATABASE_FORMAT_VERSION: u64 = 1;
+pub const DATABASE_FORMAT_VERSION: u64 = 2;
 
 /// Cloneable low-level database shared by all index domains.
 #[derive(Clone)]
@@ -83,6 +85,51 @@ impl IndexerDatabase {
     pub(crate) fn write(&self, batch: WriteBatch) -> Result<(), Error> {
         self.db.write(batch)?;
         Ok(())
+    }
+
+    /// Returns all entries whose keys start with `prefix`, in ascending order.
+    pub(crate) fn scan_prefix(
+        &self,
+        column: DatabaseColumn,
+        prefix: &[u8],
+    ) -> Result<Vec<DatabaseEntry>, Error> {
+        let mut entries = Vec::new();
+        for entry in self.db.iterator_cf(
+            self.column_family(column),
+            IteratorMode::From(prefix, Direction::Forward),
+        ) {
+            let (key, value) = entry?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            entries.push((key.to_vec(), value.to_vec()));
+        }
+        Ok(entries)
+    }
+
+    /// Returns at most `limit` prefix-matching entries at or below `start`, newest first.
+    pub(crate) fn scan_prefix_reverse_from(
+        &self,
+        column: DatabaseColumn,
+        prefix: &[u8],
+        start: &[u8],
+        limit: usize,
+    ) -> Result<Vec<DatabaseEntry>, Error> {
+        let mut entries = Vec::with_capacity(limit);
+        for entry in self.db.iterator_cf(
+            self.column_family(column),
+            IteratorMode::From(start, Direction::Reverse),
+        ) {
+            let (key, value) = entry?;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            entries.push((key.to_vec(), value.to_vec()));
+            if entries.len() == limit {
+                break;
+            }
+        }
+        Ok(entries)
     }
 
     fn ensure_format_version(&self) -> Result<(), Error> {

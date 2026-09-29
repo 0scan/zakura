@@ -58,7 +58,7 @@ impl Indexer {
     }
 
     /// Returns the explorer record stored for `hash`.
-    pub(super) fn block_record(&self, hash: Hash) -> Result<Option<BlockRecord>, Error> {
+    pub(crate) fn block_record(&self, hash: Hash) -> Result<Option<BlockRecord>, Error> {
         self.database
             .get(DatabaseColumn::BlockRecords, hash.0)?
             .map(|value| serde_json::from_slice(&value).map_err(Error::from))
