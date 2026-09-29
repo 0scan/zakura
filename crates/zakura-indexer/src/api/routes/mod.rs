@@ -28,18 +28,35 @@ where
         .strip_prefix(BLOCKS_PATH)
         .and_then(|suffix| suffix.strip_prefix('/'))
         .filter(|identifier| !identifier.is_empty() && !identifier.contains('/'));
-    let response = match (request.method(), path, block_identifier) {
-        (&Method::GET, BLOCKS_PATH, _) => blocks::get(request.uri().query(), indexer).await,
-        (&Method::OPTIONS, BLOCKS_PATH, _) => response::empty(StatusCode::NO_CONTENT),
-        (&Method::GET, TRANSACTIONS_PATH, _) => {
+    let transaction_identifier = path
+        .strip_prefix(TRANSACTIONS_PATH)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .filter(|identifier| !identifier.is_empty() && !identifier.contains('/'));
+    let response = match (
+        request.method(),
+        path,
+        block_identifier,
+        transaction_identifier,
+    ) {
+        (&Method::GET, BLOCKS_PATH, _, _) => blocks::get(request.uri().query(), indexer).await,
+        (&Method::OPTIONS, BLOCKS_PATH, _, _) => response::empty(StatusCode::NO_CONTENT),
+        (&Method::GET, TRANSACTIONS_PATH, _, _) => {
             transactions::get(request.uri().query(), indexer).await
         }
-        (&Method::OPTIONS, TRANSACTIONS_PATH, _) => response::empty(StatusCode::NO_CONTENT),
-        (&Method::GET, _, Some(identifier)) => {
+        (&Method::OPTIONS, TRANSACTIONS_PATH, _, _) => response::empty(StatusCode::NO_CONTENT),
+        (&Method::GET, _, Some(identifier), _) => {
             blocks::get_details(identifier, indexer, read_state).await
         }
-        (&Method::OPTIONS, _, Some(_)) => response::empty(StatusCode::NO_CONTENT),
-        (_, BLOCKS_PATH, _) | (_, TRANSACTIONS_PATH, _) | (_, _, Some(_)) => response::error(
+        (&Method::GET, _, _, Some(identifier)) => {
+            transactions::get_details(identifier, indexer, read_state).await
+        }
+        (&Method::OPTIONS, _, Some(_), _) | (&Method::OPTIONS, _, _, Some(_)) => {
+            response::empty(StatusCode::NO_CONTENT)
+        }
+        (_, BLOCKS_PATH, _, _)
+        | (_, TRANSACTIONS_PATH, _, _)
+        | (_, _, Some(_), _)
+        | (_, _, _, Some(_)) => response::error(
             StatusCode::METHOD_NOT_ALLOWED,
             "only GET and OPTIONS are supported for this route",
         ),
@@ -142,6 +159,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn validates_and_resolves_transaction_detail_identifiers() {
+        let response = request("/api/v1/transactions/not-a-transaction").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = request(&format!("/api/v1/transactions/{}", "00".repeat(32))).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
     async fn request(uri: &str) -> super::ApiResponse {
         let indexer =
             Indexer::open_ephemeral(Network::Mainnet).expect("ephemeral test indexer should open");
@@ -167,6 +193,7 @@ mod tests {
         tower::service_fn(|request: ReadRequest| async move {
             match request {
                 ReadRequest::BlockAndSize(_) => Ok(ReadResponse::BlockAndSize(None)),
+                ReadRequest::Transaction(_) => Ok(ReadResponse::Transaction(None)),
                 request => Err(format!("unexpected test state request: {request:?}").into()),
             }
         })

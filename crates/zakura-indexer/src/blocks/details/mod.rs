@@ -2,13 +2,13 @@
 
 mod response;
 mod state;
-mod transactions;
 mod value_pools;
 
 use zakura_chain::block::{Block, Hash, Height};
 use zakura_state::{HashOrHeight, ReadRequest, ReadResponse, ReadState};
 
 use crate::{
+    transactions::build_block_transactions,
     types::{BlockDetails, BlockRecord},
     Error, Indexer,
 };
@@ -57,7 +57,7 @@ impl Indexer {
         let (summary, block_transactions) = tokio::task::spawn_blocking(move || {
             let summary =
                 indexer.indexed_summary(hash, height, serialized_size, &block_for_index)?;
-            let block_transactions = transactions::build(
+            let block_transactions = build_block_transactions(
                 &indexer,
                 &network,
                 &block_for_index,

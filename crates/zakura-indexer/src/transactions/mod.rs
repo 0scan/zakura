@@ -2,11 +2,13 @@
 
 mod classify;
 mod cursor;
+mod details;
 mod disk_format;
 mod filter;
 mod query;
 mod write;
 
+pub(crate) use details::build_block_transactions;
 pub(crate) use filter::{
     AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter, TransactionKindFilter, TransactionQuery,
 };

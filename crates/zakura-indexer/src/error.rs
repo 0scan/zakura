@@ -36,6 +36,10 @@ pub enum Error {
     #[error("block is not available in the explorer index yet: {0}")]
     BlockNotIndexed(String),
 
+    /// State has the transaction, but the explorer index has not caught up to it yet.
+    #[error("transaction is not available in the explorer index yet: {0}")]
+    TransactionNotIndexed(String),
+
     /// A consensus-serialized transparent output was invalid.
     #[error("indexer transparent output error: {0}")]
     TransparentOutput(String),

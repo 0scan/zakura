@@ -51,6 +51,9 @@ pub struct BlockTransaction {
     /// Combined Sapling, Orchard, and Ironwood value balance in zatoshis.
     pub value_balance: String,
 
+    /// Transparent value balance in zatoshis.
+    pub value_balance_transparent: String,
+
     /// Sapling value balance in zatoshis.
     pub value_balance_sapling: String,
 

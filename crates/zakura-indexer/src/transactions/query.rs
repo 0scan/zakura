@@ -36,6 +36,20 @@ const DEFAULT_QUERY_LIMIT: u32 = 25;
 const MAX_QUERY_LIMIT: u32 = 100;
 
 impl Indexer {
+    /// Returns the canonical transaction hash stored at `position`.
+    pub(super) fn canonical_transaction_hash(
+        &self,
+        position: TransactionPosition,
+    ) -> Result<Option<TransactionHash>, Error> {
+        self.database
+            .get(
+                DatabaseColumn::CanonicalTransactionPositions,
+                transaction_position_key(position),
+            )?
+            .map(|bytes| decode_transaction_hash(&bytes))
+            .transpose()
+    }
+
     /// Returns canonical transaction summaries from newest to oldest.
     pub(crate) async fn recent_transactions(
         &self,

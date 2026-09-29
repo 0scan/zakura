@@ -22,6 +22,6 @@ pub use sync::spawn_block_sync;
 pub use types::{
     BlockDetails, BlockRecord, BlockTransaction, BlockTransactionInput, BlockTransactionOutput,
     BlockTrees, BlocksPagination, BlocksResponse, PageDirection, ShieldedFlow, ShieldedPool,
-    TransactionKind, TransactionListItem, TransactionsPagination, TransactionsResponse, TreeSize,
-    ValuePoolBalance,
+    TransactionDetails, TransactionKind, TransactionListItem, TransactionsPagination,
+    TransactionsResponse, TreeSize, ValuePoolBalance,
 };

@@ -3,6 +3,8 @@
 use std::time::Duration;
 
 use hyper::StatusCode;
+use zakura_chain::transaction::Hash as TransactionHash;
+use zakura_state::ReadState;
 
 use crate::{
     transactions::{
@@ -15,6 +17,7 @@ use crate::{
 use super::super::response::{self, ApiResponse};
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+const DETAIL_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_QUERY_LENGTH: usize = 1_024;
 
 #[derive(Default)]
@@ -51,6 +54,58 @@ pub(super) async fn get(query: Option<&str>, indexer: Indexer) -> ApiResponse {
         Err(_) => {
             tracing::warn!("explorer transaction query timed out");
             response::error(StatusCode::GATEWAY_TIMEOUT, "transaction query timed out")
+        }
+    }
+}
+
+pub(super) async fn get_details<State>(
+    identifier: &str,
+    indexer: Indexer,
+    read_state: State,
+) -> ApiResponse
+where
+    State: ReadState,
+{
+    let txid = match identifier.parse::<TransactionHash>() {
+        Ok(txid) => txid,
+        Err(_) => return response::error(StatusCode::BAD_REQUEST, "invalid transaction id"),
+    };
+
+    match tokio::time::timeout(
+        DETAIL_QUERY_TIMEOUT,
+        indexer.transaction_details(read_state, txid),
+    )
+    .await
+    {
+        Ok(Ok(Some(transaction))) => response::json(StatusCode::OK, &transaction),
+        Ok(Ok(None)) => response::error(StatusCode::NOT_FOUND, "transaction not found"),
+        Ok(Err(Error::TransactionNotIndexed(message))) => {
+            tracing::debug!(%message, "explorer transaction detail is waiting for the index");
+            response::error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "transaction index is still catching up",
+            )
+        }
+        Ok(Err(Error::StateRequest(message))) => {
+            tracing::error!(%message, "explorer transaction state query failed");
+            response::error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "transaction state query failed",
+            )
+        }
+        Ok(Err(error)) => {
+            tracing::error!(?error, "explorer transaction detail query failed");
+            response::error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "transaction detail query failed",
+            )
+        }
+        Err(_) => {
+            tracing::warn!("explorer transaction detail query timed out");
+            response::error(
+                StatusCode::GATEWAY_TIMEOUT,
+                "transaction detail query timed out",
+            )
         }
     }
 }
