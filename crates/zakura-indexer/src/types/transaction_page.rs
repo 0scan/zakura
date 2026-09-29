@@ -7,7 +7,7 @@ use super::TransactionListItem;
 
 /// Pagination metadata for [`TransactionsResponse`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct TransactionsPagination {
     /// Maximum number of requested records.
     pub limit: u32,

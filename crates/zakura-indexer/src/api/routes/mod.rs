@@ -78,10 +78,10 @@ mod tests {
         assert_eq!(body["blocks"], serde_json::json!([]));
         assert_eq!(body["pagination"]["limit"], 7);
         assert_eq!(body["pagination"]["total"], "0");
-        assert_eq!(body["pagination"]["hasNext"], false);
-        assert_eq!(body["pagination"]["hasPrev"], false);
-        assert_eq!(body["pagination"]["nextCursor"], Value::Null);
-        assert_eq!(body["pagination"]["prevCursor"], Value::Null);
+        assert_eq!(body["pagination"]["has_next"], false);
+        assert_eq!(body["pagination"]["has_prev"], false);
+        assert_eq!(body["pagination"]["next_cursor"], Value::Null);
+        assert_eq!(body["pagination"]["prev_cursor"], Value::Null);
     }
 
     #[tokio::test]
@@ -115,10 +115,10 @@ mod tests {
         let body: Value = serde_json::from_slice(&body).expect("response should contain JSON");
         assert_eq!(body["transactions"], serde_json::json!([]));
         assert_eq!(body["pagination"]["limit"], 25);
-        assert_eq!(body["pagination"]["hasNext"], false);
-        assert_eq!(body["pagination"]["hasPrev"], false);
-        assert_eq!(body["pagination"]["nextCursor"], Value::Null);
-        assert_eq!(body["pagination"]["prevCursor"], Value::Null);
+        assert_eq!(body["pagination"]["has_next"], false);
+        assert_eq!(body["pagination"]["has_prev"], false);
+        assert_eq!(body["pagination"]["next_cursor"], Value::Null);
+        assert_eq!(body["pagination"]["prev_cursor"], Value::Null);
     }
 
     #[tokio::test]

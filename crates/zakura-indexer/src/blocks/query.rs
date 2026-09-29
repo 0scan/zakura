@@ -272,12 +272,12 @@ mod tests {
         assert!(previous_page.pagination.has_next);
 
         let json = serde_json::to_value(&first_page).unwrap();
-        assert_eq!(json["pagination"]["hasNext"], true);
-        assert_eq!(json["pagination"]["hasPrev"], false);
-        assert!(json["pagination"]["nextCursor"].is_string());
-        assert!(json["pagination"]["prevCursor"].is_null());
-        assert!(json["pagination"].get("has_next").is_none());
-        assert!(json["pagination"].get("next_cursor").is_none());
+        assert_eq!(json["pagination"]["has_next"], true);
+        assert_eq!(json["pagination"]["has_prev"], false);
+        assert!(json["pagination"]["next_cursor"].is_string());
+        assert!(json["pagination"]["prev_cursor"].is_null());
+        assert!(json["pagination"].get("hasNext").is_none());
+        assert!(json["pagination"].get("nextCursor").is_none());
     }
 
     #[tokio::test]

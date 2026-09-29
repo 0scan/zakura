@@ -4,7 +4,7 @@
 //! `GET /api/v1/blocks` and `GET /api/v1/transactions`, plus complete block
 //! details at `GET /api/v1/blocks/{height_or_hash}` on a dedicated listener.
 //! List routes use `direction=next|prev` with the corresponding cursor returned
-//! in `nextCursor` or `prevCursor`; responses remain newest-first in both directions.
+//! in `next_cursor` or `prev_cursor`; responses remain newest-first in both directions.
 
 mod config;
 mod response;

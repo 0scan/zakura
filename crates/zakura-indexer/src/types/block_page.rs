@@ -7,7 +7,7 @@ use super::BlockRecord;
 
 /// Pagination metadata for [`BlocksResponse`].
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "snake_case")]
 pub struct BlocksPagination {
     /// Maximum number of requested records.
     pub limit: u32,

@@ -152,7 +152,7 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     deprecated: false,
 },
 "getblocks" => openrpsee::openrpc::RpcMethod {
-    description: "Returns a newest-first page of explorer block summaries from Zakura\'s\nin-process RocksDB index.\n\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `limit`: (numeric, optional, default=5, minimum=1, maximum=100) Maximum records to return.\n- `cursor`: (string, optional) Opaque `nextCursor` returned by the previous page.\n",
+    description: "Returns a newest-first page of explorer block summaries from Zakura\'s\nin-process RocksDB index.\n\nmethod: post\ntags: blockchain\n\n# Parameters\n\n- `limit`: (numeric, optional, default=5, minimum=1, maximum=100) Maximum records to return.\n- `cursor`: (string, optional) Opaque `next_cursor` returned by the previous page.\n",
     params: |_g| vec![
         _g.param::<u32>("limit", crate::methods::PARAM_LIMIT_DESC, false),
         _g.param::<String>("cursor", crate::methods::PARAM_CURSOR_DESC, false),

@@ -689,7 +689,7 @@ pub trait Rpc {
     /// # Parameters
     ///
     /// - `limit`: (numeric, optional, default=5, minimum=1, maximum=100) Maximum records to return.
-    /// - `cursor`: (string, optional) Opaque `nextCursor` returned by the previous page.
+    /// - `cursor`: (string, optional) Opaque `next_cursor` returned by the previous page.
     #[method(name = "getblocks")]
     async fn get_blocks(
         &self,
