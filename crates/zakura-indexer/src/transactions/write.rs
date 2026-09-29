@@ -12,6 +12,7 @@ use zakura_chain::{
 
 use crate::{
     database::DatabaseColumn,
+    models::{TransactionPosition, TransactionRecord},
     types::{ShieldedFlow, ShieldedPool, TransactionKind},
     Error, Indexer,
 };
@@ -25,7 +26,6 @@ use super::{
         transaction_record_key,
     },
     filter::{AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter},
-    record::{TransactionPosition, TransactionRecord},
 };
 
 impl Indexer {

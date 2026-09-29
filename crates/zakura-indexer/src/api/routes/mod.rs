@@ -78,7 +78,10 @@ mod tests {
         assert_eq!(body["blocks"], serde_json::json!([]));
         assert_eq!(body["pagination"]["limit"], 7);
         assert_eq!(body["pagination"]["total"], "0");
-        assert_eq!(body["pagination"]["hasMore"], false);
+        assert_eq!(body["pagination"]["hasNext"], false);
+        assert_eq!(body["pagination"]["hasPrev"], false);
+        assert_eq!(body["pagination"]["nextCursor"], Value::Null);
+        assert_eq!(body["pagination"]["prevCursor"], Value::Null);
     }
 
     #[tokio::test]
@@ -87,6 +90,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let response = request("/api/v1/blocks?unknown=value").await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = request("/api/v1/blocks?direction=prev").await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -109,7 +115,10 @@ mod tests {
         let body: Value = serde_json::from_slice(&body).expect("response should contain JSON");
         assert_eq!(body["transactions"], serde_json::json!([]));
         assert_eq!(body["pagination"]["limit"], 25);
-        assert_eq!(body["pagination"]["hasMore"], false);
+        assert_eq!(body["pagination"]["hasNext"], false);
+        assert_eq!(body["pagination"]["hasPrev"], false);
+        assert_eq!(body["pagination"]["nextCursor"], Value::Null);
+        assert_eq!(body["pagination"]["prevCursor"], Value::Null);
     }
 
     #[tokio::test]

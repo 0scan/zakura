@@ -5,7 +5,7 @@ use std::time::Duration;
 use hyper::StatusCode;
 use zakura_state::{HashOrHeight, ReadState};
 
-use crate::{Error, Indexer};
+use crate::{Error, Indexer, PageDirection};
 
 use super::super::response::{self, ApiResponse};
 
@@ -17,6 +17,7 @@ const MAX_QUERY_LENGTH: usize = 512;
 struct BlocksQuery {
     limit: Option<u32>,
     cursor: Option<String>,
+    direction: PageDirection,
 }
 
 pub(super) async fn get(query: Option<&str>, indexer: Indexer) -> ApiResponse {
@@ -27,7 +28,7 @@ pub(super) async fn get(query: Option<&str>, indexer: Indexer) -> ApiResponse {
 
     match tokio::time::timeout(
         QUERY_TIMEOUT,
-        indexer.recent_blocks(query.limit, query.cursor),
+        indexer.blocks_page(query.limit, query.cursor, query.direction),
     )
     .await
     {
@@ -103,27 +104,35 @@ impl BlocksQuery {
         }
 
         let mut parsed = Self::default();
+        let mut seen = std::collections::HashSet::new();
         for parameter in query.split('&').filter(|parameter| !parameter.is_empty()) {
             let (name, value) = parameter
                 .split_once('=')
                 .ok_or_else(|| format!("query parameter `{parameter}` must contain `=`"))?;
+            if value.is_empty() || !seen.insert(name) {
+                return Err(format!(
+                    "query parameter `{name}` must appear once and have a value"
+                ));
+            }
 
             match name {
-                "limit" if parsed.limit.is_none() => {
+                "limit" => {
                     parsed.limit = Some(value.parse::<u32>().map_err(|_| {
                         "query parameter `limit` must be an unsigned integer".to_string()
                     })?);
                 }
-                "cursor" if parsed.cursor.is_none() && !value.is_empty() => {
-                    parsed.cursor = Some(value.to_string());
-                }
-                "limit" | "cursor" => {
-                    return Err(format!(
-                        "query parameter `{name}` must appear once and have a value"
-                    ));
+                "cursor" => parsed.cursor = Some(value.to_string()),
+                "direction" if value == "next" => parsed.direction = PageDirection::Next,
+                "direction" if value == "prev" => parsed.direction = PageDirection::Previous,
+                "direction" => {
+                    return Err("direction must be next or prev".to_string());
                 }
                 _ => return Err(format!("unknown query parameter `{name}`")),
             }
+        }
+
+        if parsed.direction == PageDirection::Previous && parsed.cursor.is_none() {
+            return Err("direction=prev requires a cursor".to_string());
         }
 
         Ok(parsed)
@@ -132,7 +141,7 @@ impl BlocksQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::BlocksQuery;
+    use super::{BlocksQuery, PageDirection};
 
     #[test]
     fn parses_cursor_pagination_query() {
@@ -141,11 +150,22 @@ mod tests {
 
         assert_eq!(query.limit, Some(5));
         assert_eq!(query.cursor.as_deref(), Some("abc_DEF-123"));
+        assert_eq!(query.direction, PageDirection::Next);
+    }
+
+    #[test]
+    fn parses_previous_page_direction() {
+        let query = BlocksQuery::parse(Some("cursor=abc_DEF-123&direction=prev"))
+            .expect("previous query should parse");
+
+        assert_eq!(query.direction, PageDirection::Previous);
     }
 
     #[test]
     fn rejects_duplicate_parameters() {
         assert!(BlocksQuery::parse(Some("limit=5&limit=10")).is_err());
         assert!(BlocksQuery::parse(Some("cursor=one&cursor=two")).is_err());
+        assert!(BlocksQuery::parse(Some("cursor=one&direction=next&direction=prev")).is_err());
+        assert!(BlocksQuery::parse(Some("direction=prev")).is_err());
     }
 }

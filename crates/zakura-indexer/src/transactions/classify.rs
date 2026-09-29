@@ -1,11 +1,10 @@
 //! Pure transaction-kind, pool, flow, and public-amount derivation.
 
 use crate::{
+    models::TransactionRecord,
     types::{ShieldedFlow, ShieldedPool, TransactionKind},
     Error,
 };
-
-use super::record::TransactionRecord;
 
 pub(super) fn transaction_kind(record: &TransactionRecord) -> TransactionKind {
     if record.position.transaction_index == 0 {
@@ -93,7 +92,7 @@ mod tests {
     use zakura_chain::block::Height;
 
     use super::*;
-    use crate::transactions::record::TransactionPosition;
+    use crate::models::TransactionPosition;
 
     #[test]
     fn classifies_modern_shielded_flows_without_treating_fees_as_deshielding() {

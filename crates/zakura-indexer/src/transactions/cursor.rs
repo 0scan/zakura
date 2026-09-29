@@ -3,9 +3,9 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use zakura_chain::block::{Hash, Height};
 
-use crate::Error;
+use crate::{models::TransactionPosition, Error};
 
-use super::{filter::TransactionQuery, record::TransactionPosition};
+use super::filter::TransactionQuery;
 
 const CURSOR_BYTE_LENGTH: usize = 44;
 

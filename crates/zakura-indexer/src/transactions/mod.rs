@@ -5,7 +5,6 @@ mod cursor;
 mod disk_format;
 mod filter;
 mod query;
-mod record;
 mod write;
 
 pub(crate) use filter::{

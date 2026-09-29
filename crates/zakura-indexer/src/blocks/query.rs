@@ -8,7 +8,8 @@ use super::{
 };
 use crate::{
     database::{DatabaseColumn, MetadataKey},
-    types::{BlockRecord, BlocksPagination, BlocksResponse},
+    models::IndexedBlockRecord,
+    types::{BlockRecord, BlocksPagination, BlocksResponse, PageDirection},
     Error, Indexer,
 };
 
@@ -26,8 +27,18 @@ impl Indexer {
         limit: Option<u32>,
         cursor: Option<String>,
     ) -> Result<BlocksResponse, Error> {
+        self.blocks_page(limit, cursor, PageDirection::Next).await
+    }
+
+    /// Returns a canonical block page in either direction from `cursor`.
+    pub async fn blocks_page(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+        direction: PageDirection,
+    ) -> Result<BlocksResponse, Error> {
         let indexer = self.clone();
-        tokio::task::spawn_blocking(move || indexer.recent_blocks_blocking(limit, cursor))
+        tokio::task::spawn_blocking(move || indexer.blocks_page_blocking(limit, cursor, direction))
             .await
             .map_err(|error| Error::Task(error.to_string()))?
     }
@@ -57,18 +68,25 @@ impl Indexer {
         Ok(Some(hash))
     }
 
-    /// Returns the explorer record stored for `hash`.
+    /// Materializes the explorer response record stored for `hash`.
     pub(crate) fn block_record(&self, hash: Hash) -> Result<Option<BlockRecord>, Error> {
+        Ok(self
+            .indexed_block_record(hash)?
+            .map(|model| block_record(hash, model)))
+    }
+
+    fn indexed_block_record(&self, hash: Hash) -> Result<Option<IndexedBlockRecord>, Error> {
         self.database
             .get(DatabaseColumn::BlockRecords, hash.0)?
             .map(|value| serde_json::from_slice(&value).map_err(Error::from))
             .transpose()
     }
 
-    fn recent_blocks_blocking(
+    fn blocks_page_blocking(
         &self,
         limit: Option<u32>,
         cursor: Option<String>,
+        direction: PageDirection,
     ) -> Result<BlocksResponse, Error> {
         let limit = limit
             .unwrap_or(DEFAULT_QUERY_LIMIT)
@@ -76,6 +94,11 @@ impl Indexer {
         let cursor = cursor
             .map(|encoded| BlockCursor::decode(&encoded))
             .transpose()?;
+        if direction == PageDirection::Previous && cursor.is_none() {
+            return Err(Error::InvalidCursor(
+                "direction=prev requires a cursor".to_string(),
+            ));
+        }
         let Some((tip_height, _)) = self.indexed_block_tip()? else {
             if cursor.is_some() {
                 return Err(Error::InvalidCursor(
@@ -89,22 +112,27 @@ impl Indexer {
         let capacity = usize::try_from(limit).map_err(|_| {
             Error::Calculation("query limit does not fit this platform's usize".to_string())
         })?;
-        let start_height = match cursor {
-            Some(cursor) => {
-                if self.canonical_block_hash(cursor.height)? != Some(cursor.hash) {
-                    return Err(Error::InvalidCursor(
-                        "cursor block is no longer on the indexed canonical chain".to_string(),
-                    ));
-                }
-                cursor.height.previous().ok()
+        if let Some(cursor) = cursor {
+            if self.canonical_block_hash(cursor.height)? != Some(cursor.hash) {
+                return Err(Error::InvalidCursor(
+                    "cursor block is no longer on the indexed canonical chain".to_string(),
+                ));
             }
-            None => Some(tip_height),
+        }
+        let start_height = match (direction, cursor) {
+            (PageDirection::Next, Some(cursor)) => cursor.height.previous().ok(),
+            (PageDirection::Next, None) => Some(tip_height),
+            (PageDirection::Previous, Some(cursor)) => cursor
+                .height
+                .next()
+                .ok()
+                .filter(|height| *height <= tip_height),
+            (PageDirection::Previous, None) => unreachable!("previous pages require a cursor"),
         };
         let Some(mut height) = start_height else {
             return Ok(empty_response(limit, total));
         };
-        let mut blocks = Vec::with_capacity(capacity);
-        let mut last_position = None;
+        let mut records = Vec::with_capacity(capacity);
 
         for _ in 0..limit {
             let hash = self.canonical_block_hash(height)?.ok_or_else(|| {
@@ -113,31 +141,65 @@ impl Indexer {
                     height.0
                 ))
             })?;
-            let record = self.block_record(hash)?.ok_or_else(|| {
+            let model = self.indexed_block_record(hash)?.ok_or_else(|| {
                 Error::CorruptData(format!("missing block record for canonical hash {hash}"))
             })?;
-            blocks.push(record);
-            last_position = Some(BlockCursor::new(height, hash));
+            if model.height != height {
+                return Err(Error::CorruptData(format!(
+                    "block record {hash} has height {}, expected {}",
+                    model.height.0, height.0
+                )));
+            }
+            records.push((BlockCursor::new(height, hash), block_record(hash, model)));
 
-            let Ok(previous_height) = height.previous() else {
-                break;
+            height = match direction {
+                PageDirection::Next => match height.previous() {
+                    Ok(previous_height) => previous_height,
+                    Err(_) => break,
+                },
+                PageDirection::Previous => match height.next() {
+                    Ok(next_height) if next_height <= tip_height => next_height,
+                    Ok(_) | Err(_) => break,
+                },
             };
-            height = previous_height;
         }
 
-        let has_more = last_position.is_some_and(|position| position.height > Height::MIN);
-        let next_cursor = last_position
-            .filter(|position| has_more && position.height > Height::MIN)
-            .map(BlockCursor::encode);
+        if direction == PageDirection::Previous {
+            records.reverse();
+        }
+        let first_position = records.first().map(|(position, _)| *position);
+        let last_position = records.last().map(|(position, _)| *position);
+        let has_prev = first_position.is_some_and(|position| position.height < tip_height);
+        let has_next = last_position.is_some_and(|position| position.height > Height::MIN);
+        let prev_cursor = first_position.filter(|_| has_prev).map(BlockCursor::encode);
+        let next_cursor = last_position.filter(|_| has_next).map(BlockCursor::encode);
+        let blocks = records.into_iter().map(|(_, record)| record).collect();
+
         Ok(BlocksResponse {
             blocks,
             pagination: BlocksPagination {
                 limit,
                 total: total.to_string(),
-                has_more,
+                has_next,
+                has_prev,
                 next_cursor,
+                prev_cursor,
             },
         })
+    }
+}
+
+fn block_record(hash: Hash, model: IndexedBlockRecord) -> BlockRecord {
+    BlockRecord {
+        height: model.height.0.to_string(),
+        hash: hash.to_string(),
+        timestamp: model.timestamp.to_string(),
+        transaction_count: model.transaction_count,
+        size: model.serialized_size,
+        difficulty: model.difficulty,
+        miner_address: model.miner_address,
+        total_fees: model.total_fees_zat.to_string(),
+        miner_pool: model.miner_pool,
     }
 }
 
@@ -147,8 +209,10 @@ fn empty_response(limit: u32, total: u64) -> BlocksResponse {
         pagination: BlocksPagination {
             limit,
             total: total.to_string(),
-            has_more: false,
+            has_next: false,
+            has_prev: false,
             next_cursor: None,
+            prev_cursor: None,
         },
     }
 }
@@ -165,7 +229,8 @@ mod tests {
     use super::super::disk_format::{block_height_key, indexed_block_tip_value};
     use crate::{
         database::{DatabaseColumn, MetadataKey},
-        types::BlockRecord,
+        models::IndexedBlockRecord,
+        types::{BlockRecord, PageDirection},
         Indexer,
     };
 
@@ -181,7 +246,8 @@ mod tests {
 
         let first_page = indexer.recent_blocks(Some(2), None).await.unwrap();
         assert_eq!(block_heights(&first_page.blocks), ["2", "1"]);
-        assert!(first_page.pagination.has_more);
+        assert!(first_page.pagination.has_next);
+        assert!(!first_page.pagination.has_prev);
         let cursor = first_page.pagination.next_cursor.clone().unwrap();
 
         put_test_record(&indexer, 3);
@@ -189,13 +255,28 @@ mod tests {
         let second_page = indexer.recent_blocks(Some(2), Some(cursor)).await.unwrap();
         assert_eq!(block_heights(&second_page.blocks), ["0"]);
         assert_eq!(second_page.pagination.total, "4");
-        assert!(!second_page.pagination.has_more);
+        assert!(!second_page.pagination.has_next);
+        assert!(second_page.pagination.has_prev);
         assert_eq!(second_page.pagination.next_cursor, None);
 
+        let previous_page = indexer
+            .blocks_page(
+                Some(2),
+                second_page.pagination.prev_cursor,
+                PageDirection::Previous,
+            )
+            .await
+            .expect("newer block page should load");
+        assert_eq!(block_heights(&previous_page.blocks), ["2", "1"]);
+        assert!(previous_page.pagination.has_prev);
+        assert!(previous_page.pagination.has_next);
+
         let json = serde_json::to_value(&first_page).unwrap();
-        assert_eq!(json["pagination"]["hasMore"], true);
+        assert_eq!(json["pagination"]["hasNext"], true);
+        assert_eq!(json["pagination"]["hasPrev"], false);
         assert!(json["pagination"]["nextCursor"].is_string());
-        assert!(json["pagination"].get("has_more").is_none());
+        assert!(json["pagination"]["prevCursor"].is_null());
+        assert!(json["pagination"].get("has_next").is_none());
         assert!(json["pagination"].get("next_cursor").is_none());
     }
 
@@ -227,15 +308,14 @@ mod tests {
     }
 
     fn put_test_record_with_hash(indexer: &Indexer, height: u32, hash: Hash) {
-        let record = BlockRecord {
-            height: height.to_string(),
-            hash: hash.to_string(),
-            timestamp: height.to_string(),
+        let model = IndexedBlockRecord {
+            height: Height(height),
+            timestamp: i64::from(height),
             transaction_count: 1,
-            size: 100,
+            serialized_size: 100,
             difficulty: "1.000000".to_string(),
             miner_address: None,
-            total_fees: "0".to_string(),
+            total_fees_zat: 0,
             miner_pool: "Unknown".to_string(),
         };
         let mut batch = WriteBatch::default();
@@ -243,7 +323,7 @@ mod tests {
             &mut batch,
             DatabaseColumn::BlockRecords,
             hash.0,
-            serde_json::to_vec(&record).unwrap(),
+            serde_json::to_vec(&model).unwrap(),
         );
         indexer.database.insert(
             &mut batch,

@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     database::{DatabaseColumn, MetadataKey},
-    types::BlockRecord,
+    models::IndexedBlockRecord,
     Error, Indexer,
 };
 
@@ -96,12 +96,11 @@ impl Indexer {
         let size = u32::try_from(serialized_size)
             .map_err(|_| Error::Calculation("serialized block size exceeds u32".to_string()))?;
 
-        let record = BlockRecord {
-            height: height.0.to_string(),
-            hash: hash.to_string(),
-            timestamp: block.header.time.timestamp().to_string(),
+        let model = IndexedBlockRecord {
+            height,
+            timestamp: block.header.time.timestamp(),
             transaction_count,
-            size,
+            serialized_size: size,
             difficulty: format!(
                 "{:.6}",
                 block
@@ -110,7 +109,7 @@ impl Indexer {
                     .relative_to_network(&self.network)
             ),
             miner_address,
-            total_fees: total_fees.to_string(),
+            total_fees_zat: total_fees,
             miner_pool,
         };
 
@@ -118,7 +117,7 @@ impl Indexer {
             batch,
             DatabaseColumn::BlockRecords,
             hash.0,
-            serde_json::to_vec(&record)?,
+            serde_json::to_vec(&model)?,
         );
         self.database.insert(
             batch,
@@ -241,7 +240,11 @@ mod tests {
         serialization::ZcashSerialize,
     };
 
-    use crate::{transactions::TransactionQuery, types::TransactionKind, Indexer};
+    use crate::{
+        transactions::TransactionQuery,
+        types::{PageDirection, TransactionKind},
+        Indexer,
+    };
 
     #[tokio::test]
     async fn indexes_a_real_block_into_the_explorer_response() {
@@ -266,10 +269,10 @@ mod tests {
         assert_eq!(response.blocks[0].transaction_count, 1);
         assert_eq!(response.blocks[0].total_fees, "0");
         assert_eq!(response.pagination.total, "1");
-        assert!(!response.pagination.has_more);
+        assert!(!response.pagination.has_next);
 
         let transactions = indexer
-            .recent_transactions(TransactionQuery::default(), None, None)
+            .recent_transactions(TransactionQuery::default(), None, None, PageDirection::Next)
             .await
             .expect("indexed genesis transaction should be queryable");
         assert_eq!(transactions.transactions.len(), 1);
@@ -279,7 +282,7 @@ mod tests {
             transactions.transactions[0].txid,
             block.transactions[0].hash().to_string()
         );
-        assert!(!transactions.pagination.has_more);
+        assert!(!transactions.pagination.has_next);
     }
 
     #[tokio::test]
@@ -304,7 +307,7 @@ mod tests {
         assert_eq!(indexer.indexed_block_tip().unwrap(), None);
         assert_eq!(indexer.canonical_block_hash(Height(0)).unwrap(), None);
         let transactions = indexer
-            .recent_transactions(TransactionQuery::default(), None, None)
+            .recent_transactions(TransactionQuery::default(), None, None, PageDirection::Next)
             .await
             .expect("rolled back transaction query should succeed");
         assert!(transactions.transactions.is_empty());

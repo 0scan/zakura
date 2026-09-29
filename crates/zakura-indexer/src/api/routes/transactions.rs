@@ -9,7 +9,7 @@ use crate::{
         AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter, TransactionKindFilter,
         TransactionQuery,
     },
-    Error, Indexer,
+    Error, Indexer, PageDirection,
 };
 
 use super::super::response::{self, ApiResponse};
@@ -21,6 +21,7 @@ const MAX_QUERY_LENGTH: usize = 1_024;
 struct TransactionsQuery {
     limit: Option<u32>,
     cursor: Option<String>,
+    direction: PageDirection,
     filters: TransactionQuery,
 }
 
@@ -32,7 +33,7 @@ pub(super) async fn get(query: Option<&str>, indexer: Indexer) -> ApiResponse {
 
     match tokio::time::timeout(
         QUERY_TIMEOUT,
-        indexer.recent_transactions(query.filters, query.limit, query.cursor),
+        indexer.recent_transactions(query.filters, query.limit, query.cursor, query.direction),
     )
     .await
     {
@@ -82,6 +83,7 @@ impl TransactionsQuery {
                     })?);
                 }
                 "cursor" => parsed.cursor = Some(value.to_string()),
+                "direction" => parsed.direction = parse_direction(value)?,
                 "type" => parsed.filters.kind = parse_kind(value)?,
                 "flow_type" => parsed.filters.flow = parse_flow(value)?,
                 "pool" => parsed.filters.pool = parse_pool(value)?,
@@ -91,7 +93,18 @@ impl TransactionsQuery {
         }
 
         parsed.filters = parsed.filters.validate()?;
+        if parsed.direction == PageDirection::Previous && parsed.cursor.is_none() {
+            return Err("direction=prev requires a cursor".to_string());
+        }
         Ok(parsed)
+    }
+}
+
+fn parse_direction(value: &str) -> Result<PageDirection, String> {
+    match value {
+        "next" => Ok(PageDirection::Next),
+        "prev" => Ok(PageDirection::Previous),
+        _ => Err("direction must be next or prev".to_string()),
     }
 }
 
@@ -154,6 +167,15 @@ mod tests {
         assert_eq!(query.filters.flow, ShieldedFlowFilter::Shield);
         assert_eq!(query.filters.pool, ShieldedPoolFilter::Ironwood);
         assert_eq!(query.filters.amount, AmountFilter::AtLeastTenZec);
+        assert_eq!(query.direction, PageDirection::Next);
+    }
+
+    #[test]
+    fn parses_previous_page_direction() {
+        let query = TransactionsQuery::parse(Some("cursor=abc_DEF-123&direction=prev"))
+            .expect("previous query should parse");
+
+        assert_eq!(query.direction, PageDirection::Previous);
     }
 
     #[test]
@@ -165,5 +187,10 @@ mod tests {
     #[test]
     fn rejects_unindexed_arbitrary_amount_thresholds() {
         assert!(TransactionsQuery::parse(Some("type=shielded&min_zec=42")).is_err());
+    }
+
+    #[test]
+    fn rejects_previous_direction_without_cursor() {
+        assert!(TransactionsQuery::parse(Some("direction=prev")).is_err());
     }
 }

@@ -9,7 +9,11 @@ use zakura_chain::{
 
 use crate::{
     database::DatabaseColumn,
-    types::{TransactionKind, TransactionListItem, TransactionsPagination, TransactionsResponse},
+    models::{TransactionPosition, TransactionRecord},
+    types::{
+        PageDirection, TransactionKind, TransactionListItem, TransactionsPagination,
+        TransactionsResponse,
+    },
     Error, Indexer,
 };
 
@@ -26,7 +30,6 @@ use super::{
         transaction_position_key,
     },
     filter::{TransactionKindFilter, TransactionQuery},
-    record::{TransactionPosition, TransactionRecord},
 };
 
 const DEFAULT_QUERY_LIMIT: u32 = 25;
@@ -39,10 +42,11 @@ impl Indexer {
         query: TransactionQuery,
         limit: Option<u32>,
         cursor: Option<String>,
+        direction: PageDirection,
     ) -> Result<TransactionsResponse, Error> {
         let indexer = self.clone();
         tokio::task::spawn_blocking(move || {
-            indexer.recent_transactions_blocking(query, limit, cursor)
+            indexer.recent_transactions_blocking(query, limit, cursor, direction)
         })
         .await
         .map_err(|error| Error::Task(error.to_string()))?
@@ -53,6 +57,7 @@ impl Indexer {
         query: TransactionQuery,
         limit: Option<u32>,
         cursor: Option<String>,
+        direction: PageDirection,
     ) -> Result<TransactionsResponse, Error> {
         let limit = limit
             .unwrap_or(DEFAULT_QUERY_LIMIT)
@@ -60,6 +65,11 @@ impl Indexer {
         let cursor = cursor
             .map(|encoded| TransactionCursor::decode(&encoded))
             .transpose()?;
+        if direction == PageDirection::Previous && cursor.is_none() {
+            return Err(Error::InvalidCursor(
+                "direction=prev requires a cursor".to_string(),
+            ));
+        }
         if let Some(cursor) = cursor {
             if !cursor.matches(query) {
                 return Err(Error::InvalidCursor(
@@ -90,19 +100,34 @@ impl Indexer {
         let scan_limit = requested
             .checked_add(2)
             .ok_or_else(|| Error::Calculation("transaction scan limit overflow".to_string()))?;
-        let entries = self.database.scan_prefix_reverse_from(
-            source.column,
-            &source.prefix,
-            &source.start_key,
-            scan_limit,
-        )?;
+        let entries = match direction {
+            PageDirection::Next => self.database.scan_prefix_reverse_from(
+                source.column,
+                &source.prefix,
+                &source.start_key,
+                scan_limit,
+            )?,
+            PageDirection::Previous => self.database.scan_prefix_forward_from(
+                source.column,
+                &source.prefix,
+                &source.start_key,
+                scan_limit,
+            )?,
+        };
+
+        let mut entries: Vec<_> = entries
+            .into_iter()
+            .filter(|(key, _)| cursor.is_none() || key.as_slice() != source.start_key.as_slice())
+            .collect();
+        let has_more_in_direction = entries.len() > requested;
+        entries.truncate(requested);
+        if direction == PageDirection::Previous {
+            entries.reverse();
+        }
 
         let mut block_cache = HashMap::new();
-        let mut matched = Vec::with_capacity(requested.saturating_add(1));
+        let mut matched = Vec::with_capacity(entries.len());
         for (key, value) in entries {
-            if cursor.is_some() && key == source.start_key {
-                continue;
-            }
             let position = decode_ordered_position(&key)?;
             let txid = if source.column == DatabaseColumn::CanonicalTransactionPositions {
                 decode_transaction_hash(&value)?
@@ -136,28 +161,35 @@ impl Indexer {
                 self.transaction_block_fields(position.height, &mut block_cache)?;
             let item = transaction_list_item(txid, block_hash, block_time, record)?;
             matched.push((position, block_hash, item));
-            if matched.len() > requested {
-                break;
-            }
         }
 
-        let has_more = matched.len() > requested;
-        matched.truncate(requested);
-        let next_cursor = if has_more {
-            matched.last().map(|(position, block_hash, _)| {
-                TransactionCursor::new(*position, *block_hash, query).encode()
-            })
-        } else {
-            None
+        let has_rows = !matched.is_empty();
+        let (has_next, has_prev) = match direction {
+            PageDirection::Next => (has_more_in_direction, cursor.is_some() && has_rows),
+            PageDirection::Previous => (cursor.is_some() && has_rows, has_more_in_direction),
         };
+        let next_cursor = matched
+            .last()
+            .filter(|_| has_next)
+            .map(|(position, block_hash, _)| {
+                TransactionCursor::new(*position, *block_hash, query).encode()
+            });
+        let prev_cursor = matched
+            .first()
+            .filter(|_| has_prev)
+            .map(|(position, block_hash, _)| {
+                TransactionCursor::new(*position, *block_hash, query).encode()
+            });
         let transactions = matched.into_iter().map(|(_, _, item)| item).collect();
 
         Ok(TransactionsResponse {
             transactions,
             pagination: TransactionsPagination {
                 limit,
-                has_more,
+                has_next,
+                has_prev,
                 next_cursor,
+                prev_cursor,
             },
         })
     }
@@ -289,8 +321,9 @@ mod tests {
     use super::*;
     use crate::{
         database::DatabaseColumn,
+        models::IndexedBlockRecord,
         transactions::{AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter},
-        types::BlockRecord,
+        types::PageDirection,
     };
 
     #[tokio::test]
@@ -310,26 +343,47 @@ mod tests {
         );
 
         let first = indexer
-            .recent_transactions(TransactionQuery::default(), Some(2), None)
+            .recent_transactions(
+                TransactionQuery::default(),
+                Some(2),
+                None,
+                PageDirection::Next,
+            )
             .await
             .expect("first transaction page should load");
         assert_eq!(first.transactions.len(), 2);
         assert_eq!(first.transactions[0].block_height, "2");
         assert_eq!(first.transactions[1].amount_zec.as_deref(), Some("20"));
-        assert!(first.pagination.has_more);
+        assert!(first.pagination.has_next);
+        assert!(!first.pagination.has_prev);
 
         let second = indexer
             .recent_transactions(
                 TransactionQuery::default(),
                 Some(2),
                 first.pagination.next_cursor.clone(),
+                PageDirection::Next,
             )
             .await
             .expect("second transaction page should load");
         assert_eq!(second.transactions.len(), 1);
         assert_eq!(second.transactions[0].block_height, "1");
         assert_eq!(second.transactions[0].transaction_index, 0);
-        assert!(!second.pagination.has_more);
+        assert!(!second.pagination.has_next);
+        assert!(second.pagination.has_prev);
+
+        let previous = indexer
+            .recent_transactions(
+                TransactionQuery::default(),
+                Some(2),
+                second.pagination.prev_cursor,
+                PageDirection::Previous,
+            )
+            .await
+            .expect("newer transaction page should load");
+        assert_eq!(previous.transactions, first.transactions);
+        assert!(!previous.pagination.has_prev);
+        assert!(previous.pagination.has_next);
 
         let shielded_query = TransactionQuery {
             kind: TransactionKindFilter::Shielded,
@@ -338,7 +392,7 @@ mod tests {
             amount: AmountFilter::AtLeastTenZec,
         };
         let shielded = indexer
-            .recent_transactions(shielded_query, None, None)
+            .recent_transactions(shielded_query, None, None, PageDirection::Next)
             .await
             .expect("shielded filter intersection should load");
         assert_eq!(shielded.transactions.len(), 1);
@@ -349,7 +403,12 @@ mod tests {
         );
 
         let mismatched_cursor = indexer
-            .recent_transactions(shielded_query, None, first.pagination.next_cursor)
+            .recent_transactions(
+                shielded_query,
+                None,
+                first.pagination.next_cursor,
+                PageDirection::Next,
+            )
             .await
             .expect_err("a cursor must remain bound to its original filters");
         assert!(matches!(mismatched_cursor, Error::InvalidCursor(_)));
@@ -359,15 +418,14 @@ mod tests {
         let height = record.position.height;
         let hash_byte = u8::try_from(height.0).expect("test height fits in u8");
         let block_hash = Hash([hash_byte; 32]);
-        let block = BlockRecord {
-            height: height.0.to_string(),
-            hash: block_hash.to_string(),
-            timestamp: (1_700_000_000 + u64::from(height.0)).to_string(),
+        let block = IndexedBlockRecord {
+            height,
+            timestamp: 1_700_000_000 + i64::from(height.0),
             transaction_count: record.position.transaction_index + 1,
-            size: 1_000,
+            serialized_size: 1_000,
             difficulty: "1.000000".to_string(),
             miner_address: None,
-            total_fees: "0".to_string(),
+            total_fees_zat: 0,
             miner_pool: "Unknown".to_string(),
         };
         let mut batch = WriteBatch::default();

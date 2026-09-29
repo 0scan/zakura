@@ -2,12 +2,13 @@
 
 use zakura_chain::{block::Height, transaction::Hash as TransactionHash};
 
-use crate::{types::TransactionKind, Error};
-
-use super::{
-    filter::{AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter},
-    record::{TransactionPosition, TransactionRecord},
+use crate::{
+    models::{TransactionPosition, TransactionRecord},
+    types::TransactionKind,
+    Error,
 };
+
+use super::filter::{AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter};
 
 pub(super) const TRANSACTION_RECORD_BYTES: usize = 80;
 const POSITION_KEY_BYTES: usize = 8;

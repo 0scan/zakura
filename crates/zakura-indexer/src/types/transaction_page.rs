@@ -13,10 +13,16 @@ pub struct TransactionsPagination {
     pub limit: u32,
 
     /// Whether an older matching transaction is available.
-    pub has_more: bool,
+    pub has_next: bool,
 
-    /// Opaque position to pass as `cursor` when requesting the next page.
+    /// Whether a newer matching transaction is available.
+    pub has_prev: bool,
+
+    /// Opaque position to pass as `cursor` with `direction=next`.
     pub next_cursor: Option<String>,
+
+    /// Opaque position to pass as `cursor` with `direction=prev`.
+    pub prev_cursor: Option<String>,
 }
 
 /// A newest-first page of canonical transactions.
