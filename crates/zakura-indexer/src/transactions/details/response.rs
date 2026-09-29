@@ -118,12 +118,17 @@ fn build_transaction(
     }
 
     let txid = transaction.hash();
-    let spent_utxos = transaction
+    let spent_outpoints = transaction
         .inputs()
         .iter()
         .filter_map(Input::outpoint)
-        .map(|outpoint| {
-            let utxo = indexer.transparent_output(outpoint)?.ok_or_else(|| {
+        .collect::<Vec<_>>();
+    let spent_utxos = spent_outpoints
+        .iter()
+        .copied()
+        .zip(indexer.transparent_outputs(&spent_outpoints)?)
+        .map(|(outpoint, utxo)| {
+            let utxo = utxo.ok_or_else(|| {
                 Error::CorruptData(format!(
                     "missing indexed transparent output for {outpoint:?}"
                 ))

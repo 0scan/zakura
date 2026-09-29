@@ -263,6 +263,27 @@ impl Indexer {
             .transpose()
     }
 
+    pub(crate) fn transparent_outputs(
+        &self,
+        outpoints: &[OutPoint],
+    ) -> Result<Vec<Option<Utxo>>, Error> {
+        let keys = outpoints
+            .iter()
+            .copied()
+            .map(transparent_outpoint_key)
+            .collect::<Vec<_>>();
+
+        self.database
+            .multi_get(DatabaseColumn::TransparentOutputs, &keys)?
+            .into_iter()
+            .map(|bytes| {
+                bytes
+                    .map(|bytes| decode_transparent_output(&bytes))
+                    .transpose()
+            })
+            .collect()
+    }
+
     fn prepare_transparent_output(
         &self,
         batch: &mut WriteBatch,
@@ -290,7 +311,7 @@ mod tests {
         parameters::{testnet::RegtestParameters, Network, NetworkKind},
         serialization::ZcashSerialize,
         transaction::Transaction,
-        transparent::{Address, Output},
+        transparent::{Address, OutPoint, Output},
     };
 
     use crate::{
@@ -298,6 +319,37 @@ mod tests {
         types::{PageDirection, TransactionKind},
         Indexer,
     };
+
+    #[test]
+    fn loads_transparent_outputs_in_one_ordered_batch() {
+        let network = Network::new_regtest(RegtestParameters::default());
+        let indexer = Indexer::open_ephemeral(network).expect("ephemeral index should open");
+        let block = regtest_genesis_block();
+        let transaction_hash = block.transactions[0].hash();
+        indexer
+            .index_blocks(vec![(
+                Height(0),
+                block.clone(),
+                block.zcash_serialized_size(),
+            )])
+            .expect("valid genesis block should be indexed");
+        let existing = OutPoint {
+            hash: transaction_hash,
+            index: 0,
+        };
+        let missing = OutPoint {
+            hash: transaction_hash,
+            index: u32::MAX,
+        };
+
+        let outputs = indexer
+            .transparent_outputs(&[existing, missing, existing])
+            .expect("batch output lookup should succeed");
+
+        assert!(outputs[0].is_some());
+        assert!(outputs[1].is_none());
+        assert_eq!(outputs[0], outputs[2]);
+    }
 
     #[tokio::test]
     async fn indexes_a_real_block_into_the_explorer_response() {

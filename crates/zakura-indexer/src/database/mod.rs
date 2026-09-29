@@ -67,6 +67,26 @@ impl IndexerDatabase {
         Ok(self.db.get_cf(self.column_family(column), key)?)
     }
 
+    /// Returns values for `keys` in input order using one RocksDB batched read.
+    pub(crate) fn multi_get<K>(
+        &self,
+        column: DatabaseColumn,
+        keys: &[K],
+    ) -> Result<Vec<Option<Vec<u8>>>, Error>
+    where
+        K: AsRef<[u8]>,
+    {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.db
+            .batched_multi_get_cf(self.column_family(column), keys.iter(), false)
+            .into_iter()
+            .map(|result| Ok(result?.map(|bytes| bytes.to_vec())))
+            .collect()
+    }
+
     pub(crate) fn insert(
         &self,
         batch: &mut WriteBatch,
@@ -192,7 +212,41 @@ impl IndexerDatabase {
 
 #[cfg(test)]
 mod tests {
-    use super::IndexerDatabase;
+    use rocksdb::WriteBatch;
+
+    use super::{DatabaseColumn, IndexerDatabase};
+
+    #[test]
+    fn multi_get_preserves_input_order_and_missing_keys() {
+        let database = IndexerDatabase::open_ephemeral("zakura-indexer-multi-get-test-")
+            .expect("ephemeral indexer database should open");
+        let mut batch = WriteBatch::default();
+        database.insert(
+            &mut batch,
+            DatabaseColumn::TransactionRecords,
+            b"alpha",
+            b"first",
+        );
+        database.insert(
+            &mut batch,
+            DatabaseColumn::TransactionRecords,
+            b"bravo",
+            b"second",
+        );
+        database
+            .write(batch)
+            .expect("test records should be written");
+
+        let keys: [&[u8]; 3] = [b"bravo", b"missing", b"alpha"];
+        let values = database
+            .multi_get(DatabaseColumn::TransactionRecords, &keys)
+            .expect("batch lookup should succeed");
+
+        assert_eq!(
+            values,
+            vec![Some(b"second".to_vec()), None, Some(b"first".to_vec())]
+        );
+    }
 
     #[test]
     fn ephemeral_database_directory_is_removed_after_close() {
