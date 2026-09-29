@@ -1,148 +1,65 @@
-//! Bounded statistics queries over persisted aggregates and recent blocks.
+//! Explorer statistics adapters backed by canonical state.
+
+use tower::ServiceExt;
+use zakura_state::{ReadRequest, ReadResponse, ReadState};
 
 use crate::{
-    models::ChainStatsRecord,
     types::{ChainTotals, IndexerStats, RollingDayStats},
-    Error, Indexer,
+    Error,
 };
 
-const ROLLING_DAY_SECONDS: i64 = 24 * 60 * 60;
-const MAX_ROLLING_WINDOW_BLOCKS: u32 = 10_000;
+/// Returns finalized all-time totals and a bounded trailing 24-hour snapshot.
+pub async fn stats_from_state<State>(read_state: State) -> Result<IndexerStats, Error>
+where
+    State: ReadState,
+{
+    let response = read_state
+        .oneshot(ReadRequest::ExplorerStatsSnapshot)
+        .await
+        .map_err(|error| Error::StateRequest(error.to_string()))?;
+    let ReadResponse::ExplorerStatsSnapshot(snapshot) = response else {
+        return Err(Error::StateResponse(
+            "state returned the wrong response for explorer statistics".to_string(),
+        ));
+    };
+    let rolling = snapshot.trailing_24h;
+    let elapsed = rolling
+        .window_end
+        .zip(rolling.oldest_timestamp)
+        .map(|(end, oldest)| end.saturating_sub(oldest).max(0))
+        .and_then(|value| u128::try_from(value).ok())
+        .unwrap_or_default();
+    let intervals = rolling.totals.block_count.saturating_sub(1);
 
-impl Indexer {
-    /// Returns the highest canonical block covered by the index without scanning statistics.
-    pub async fn indexed_tip(
-        &self,
-    ) -> Result<Option<(zakura_chain::block::Height, zakura_chain::block::Hash)>, Error> {
-        let indexer = self.clone();
-        tokio::task::spawn_blocking(move || indexer.indexed_block_tip())
-            .await
-            .map_err(|error| Error::Task(error.to_string()))?
-    }
-
-    /// Returns all-time canonical totals and a bounded trailing 24-hour snapshot.
-    pub async fn stats(&self) -> Result<IndexerStats, Error> {
-        let indexer = self.clone();
-        tokio::task::spawn_blocking(move || indexer.stats_blocking())
-            .await
-            .map_err(|error| Error::Task(error.to_string()))?
-    }
-
-    fn stats_blocking(&self) -> Result<IndexerStats, Error> {
-        let indexed_tip = self.indexed_block_tip()?;
-        let totals = chain_totals(self.chain_stats_record()?);
-        let trailing_24h = self.trailing_day_stats(indexed_tip.map(|(height, _)| height))?;
-
-        Ok(IndexerStats {
-            indexed_height: indexed_tip.map(|(height, _)| height.0.to_string()),
-            indexed_block_hash: indexed_tip.map(|(_, hash)| hash.to_string()),
-            totals,
-            trailing_24h,
-        })
-    }
-
-    fn trailing_day_stats(
-        &self,
-        tip_height: Option<zakura_chain::block::Height>,
-    ) -> Result<RollingDayStats, Error> {
-        let Some(tip_height) = tip_height else {
-            return Ok(empty_rolling_day());
-        };
-        let tip_hash = self.canonical_block_hash(tip_height)?.ok_or_else(|| {
-            Error::CorruptData("indexed tip is missing its canonical block hash".to_string())
-        })?;
-        let tip = self.indexed_block_record(tip_hash)?.ok_or_else(|| {
-            Error::CorruptData("indexed tip is missing its block record".to_string())
-        })?;
-        let window_end = tip.timestamp;
-        let window_start = window_end.saturating_sub(ROLLING_DAY_SECONDS);
-        let mut height = tip_height;
-        let mut block_count = 0_u64;
-        let mut transaction_count = 0_u64;
-        let mut transparent_transaction_count = 0_u64;
-        let mut shielded_transaction_count = 0_u64;
-        let mut coinbase_transaction_count = 0_u64;
-        let mut block_bytes = 0_u64;
-        let mut total_fees_zat = 0_u64;
-        let mut oldest_timestamp = window_end;
-        let mut complete = false;
-
-        for _ in 0..MAX_ROLLING_WINDOW_BLOCKS {
-            let hash = self.canonical_block_hash(height)?.ok_or_else(|| {
-                Error::CorruptData(format!(
-                    "missing canonical block hash at height {}",
-                    height.0
-                ))
-            })?;
-            let block = self.indexed_block_record(hash)?.ok_or_else(|| {
-                Error::CorruptData(format!("missing indexed block record for {hash}"))
-            })?;
-            if block.timestamp < window_start {
-                complete = true;
-                break;
-            }
-
-            block_count = checked_add(block_count, 1, "rolling block count")?;
-            transaction_count = checked_add(
-                transaction_count,
-                u64::from(block.transaction_count),
-                "rolling transaction count",
-            )?;
-            transparent_transaction_count = checked_add(
-                transparent_transaction_count,
-                u64::from(block.transparent_transaction_count),
-                "rolling transparent transaction count",
-            )?;
-            shielded_transaction_count = checked_add(
-                shielded_transaction_count,
-                u64::from(block.shielded_transaction_count),
-                "rolling shielded transaction count",
-            )?;
-            coinbase_transaction_count = checked_add(
-                coinbase_transaction_count,
-                u64::from(block.coinbase_transaction_count),
-                "rolling coinbase transaction count",
-            )?;
-            block_bytes = checked_add(
-                block_bytes,
-                u64::from(block.serialized_size),
-                "rolling block bytes",
-            )?;
-            total_fees_zat =
-                checked_add(total_fees_zat, block.total_fees_zat, "rolling total fees")?;
-            oldest_timestamp = oldest_timestamp.min(block.timestamp);
-
-            match height.previous() {
-                Ok(previous) => height = previous,
-                Err(_) => {
-                    complete = true;
-                    break;
-                }
-            }
-        }
-
-        let elapsed = u64::try_from(window_end.saturating_sub(oldest_timestamp).max(0))
-            .map_err(|_| Error::Calculation("rolling block duration exceeds u64".to_string()))?;
-        let intervals = block_count.saturating_sub(1);
-        Ok(RollingDayStats {
-            complete,
-            window_start: Some(window_start.to_string()),
-            window_end: Some(window_end.to_string()),
-            block_count: block_count.to_string(),
-            transaction_count: transaction_count.to_string(),
-            transparent_transaction_count: transparent_transaction_count.to_string(),
-            shielded_transaction_count: shielded_transaction_count.to_string(),
-            coinbase_transaction_count: coinbase_transaction_count.to_string(),
-            block_bytes: block_bytes.to_string(),
-            total_fees_zat: total_fees_zat.to_string(),
-            average_block_time_seconds: ratio(u128::from(elapsed), intervals),
-            average_block_size_bytes: ratio(u128::from(block_bytes), block_count),
-            average_transactions_per_block: ratio(u128::from(transaction_count), block_count),
-        })
-    }
+    Ok(IndexerStats {
+        indexed_height: snapshot.best_tip.map(|(height, _)| height.0.to_string()),
+        indexed_block_hash: snapshot.best_tip.map(|(_, hash)| hash.to_string()),
+        totals: chain_totals(snapshot.totals),
+        trailing_24h: RollingDayStats {
+            complete: rolling.complete,
+            window_start: rolling.window_start.map(|value| value.to_string()),
+            window_end: rolling.window_end.map(|value| value.to_string()),
+            block_count: rolling.totals.block_count.to_string(),
+            transaction_count: rolling.totals.transaction_count.to_string(),
+            transparent_transaction_count: rolling.totals.transparent_transaction_count.to_string(),
+            shielded_transaction_count: rolling.totals.shielded_transaction_count.to_string(),
+            coinbase_transaction_count: rolling.totals.coinbase_transaction_count.to_string(),
+            block_bytes: rolling.totals.block_bytes.to_string(),
+            total_fees_zat: rolling.totals.total_fees_zat.to_string(),
+            average_block_time_seconds: ratio(elapsed, intervals),
+            average_block_size_bytes: ratio(
+                u128::from(rolling.totals.block_bytes),
+                rolling.totals.block_count,
+            ),
+            average_transactions_per_block: ratio(
+                u128::from(rolling.totals.transaction_count),
+                rolling.totals.block_count,
+            ),
+        },
+    })
 }
 
-fn chain_totals(record: ChainStatsRecord) -> ChainTotals {
+fn chain_totals(record: zakura_state::ExplorerChainStats) -> ChainTotals {
     ChainTotals {
         block_count: record.block_count.to_string(),
         transaction_count: record.transaction_count.to_string(),
@@ -154,30 +71,6 @@ fn chain_totals(record: ChainStatsRecord) -> ChainTotals {
         fully_shielded_transaction_count: record.fully_shielded_transaction_count.to_string(),
         mixed_pool_transaction_count: record.mixed_pool_transaction_count.to_string(),
     }
-}
-
-fn empty_rolling_day() -> RollingDayStats {
-    RollingDayStats {
-        complete: true,
-        window_start: None,
-        window_end: None,
-        block_count: "0".to_string(),
-        transaction_count: "0".to_string(),
-        transparent_transaction_count: "0".to_string(),
-        shielded_transaction_count: "0".to_string(),
-        coinbase_transaction_count: "0".to_string(),
-        block_bytes: "0".to_string(),
-        total_fees_zat: "0".to_string(),
-        average_block_time_seconds: None,
-        average_block_size_bytes: None,
-        average_transactions_per_block: None,
-    }
-}
-
-fn checked_add(current: u64, value: u64, field: &str) -> Result<u64, Error> {
-    current
-        .checked_add(value)
-        .ok_or_else(|| Error::Calculation(format!("{field} exceeds u64")))
 }
 
 fn ratio(numerator: u128, denominator: u64) -> Option<String> {

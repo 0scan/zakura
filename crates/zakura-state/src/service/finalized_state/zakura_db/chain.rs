@@ -288,14 +288,14 @@ impl DiskWriteBatch {
         &mut self,
         db: &ZakuraDb,
         finalized: &FinalizedBlock,
-        utxos_spent_by_block: HashMap<transparent::OutPoint, transparent::Utxo>,
+        utxos_spent_by_block: &HashMap<transparent::OutPoint, transparent::Utxo>,
         value_pool: ValueBalance<NonNegative>,
-    ) -> Result<(), ValidateContextError> {
+    ) -> Result<(ValueBalance<NonNegative>, u32), ValidateContextError> {
         let block_value_pool_change = finalized
             .block
             .chain_value_pool_change(
                 &db.network(),
-                &utxos_spent_by_block,
+                utxos_spent_by_block,
                 finalized.deferred_pool_balance_change,
             )
             .map_err(|value_balance_error| {
@@ -371,6 +371,9 @@ impl DiskWriteBatch {
             &BlockInfo::new(new_value_pool, block_size as u32),
         );
 
-        Ok(())
+        Ok((
+            new_value_pool,
+            u32::try_from(block_size).expect("verified block size fits in u32"),
+        ))
     }
 }

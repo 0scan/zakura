@@ -714,40 +714,6 @@ impl StartCmd {
         // Create a channel to send mined blocks to the gossip task
         let submit_block_channel = SubmitBlockChannel::new();
 
-        #[cfg(feature = "indexer")]
-        let indexer = {
-            if config.state.storage_mode != StorageMode::Archive {
-                return Err(eyre!(
-                    "the explorer block index requires state.storage_mode = 'archive' for historical fee backfill"
-                ));
-            }
-
-            let network = config.network.network.clone();
-            let index_path = (!config.state.ephemeral).then(|| {
-                config.state.db_path(
-                    "indexer",
-                    zakura_indexer::DATABASE_FORMAT_VERSION,
-                    &config.network.network,
-                )
-            });
-            info!(?index_path, "opening explorer indexer database");
-            let indexer = tokio::task::spawn_blocking(move || match index_path {
-                Some(path) => zakura_indexer::Indexer::open(path, network),
-                None => zakura_indexer::Indexer::open_ephemeral(network),
-            })
-            .await
-            .map_err(|error| eyre!("failed to join explorer indexer open task: {error}"))?
-            .map_err(|error| eyre!("failed to open explorer indexer: {error}"))?;
-
-            let block_sync_task = zakura_indexer::spawn_block_sync(
-                indexer.clone(),
-                read_only_state_service.clone(),
-                latest_chain_tip.clone(),
-            );
-            node_tasks.track(&block_sync_task);
-            indexer
-        };
-
         // Launch RPC server
         let (rpc_impl, mut rpc_tx_queue_handle) = RpcImpl::new_with_pending_blocks(
             config.network.network.clone(),
@@ -770,9 +736,6 @@ impl StartCmd {
         let rpc_impl = rpc_impl.with_end_of_support_height(
             sync::end_of_support::end_of_support_height(&config.network.network),
         );
-        #[cfg(feature = "indexer")]
-        let rpc_impl = rpc_impl.with_indexer(indexer.clone());
-
         let node_services = ready.as_ref().map(|_| crate::node::NodeServices {
             read_state: read_only_state_service.clone(),
             latest_chain_tip: latest_chain_tip.clone(),

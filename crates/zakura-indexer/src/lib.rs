@@ -1,28 +1,31 @@
-//! Rebuildable explorer indexes maintained inside the Zakura node process.
-//!
-//! [`Indexer`] owns one separate RocksDB shared by block, transaction, and
-//! future explorer indexes. Synchronization reads committed data through
-//! in-process services and never depends on Zakura's JSON-RPC or gRPC listeners.
+//! Explorer response types and canonical-state adapters.
 
+#[cfg(feature = "state-index")]
 mod addresses;
+#[cfg(feature = "state-index")]
 mod blocks;
-mod database;
 mod error;
-mod indexer;
 mod models;
+#[cfg(feature = "state-index")]
 mod stats;
-mod sync;
 mod transactions;
 mod types;
 
-pub use database::DATABASE_FORMAT_VERSION;
+#[cfg(feature = "state-index")]
+pub use addresses::{
+    address_summary_from_state, address_transactions_page_from_state, top_balances_from_state,
+};
+#[cfg(feature = "state-index")]
+pub use blocks::{block_details_from_state, blocks_page_from_state};
 pub use error::Error;
-pub use indexer::Indexer;
-pub use sync::spawn_block_sync;
+#[cfg(feature = "state-index")]
+pub use stats::{chart_data_from_state, stats_from_state};
 pub use transactions::{
     classify_unmined_transaction, AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter,
     TransactionKindFilter, TransactionQuery,
 };
+#[cfg(feature = "state-index")]
+pub use transactions::{transaction_details_from_state, transactions_page_from_state};
 pub use types::{
     AddressActivity, AddressFirstFunding, AddressSummary, AddressTransactionListItem,
     AddressTransactionsPagination, AddressTransactionsResponse, BlockDetails, BlockRecord,

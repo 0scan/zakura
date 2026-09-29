@@ -2,7 +2,6 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use futures::{stream, StreamExt, TryStreamExt};
 use tokio::time;
 use tower::ServiceExt;
 use zakura_chain::{
@@ -11,14 +10,13 @@ use zakura_chain::{
     ironwood, orchard,
     parameters::{Network, NetworkUpgrade},
     sapling,
-    transparent::OutPoint,
+    transparent::{OutPoint, Utxo},
 };
 use zakura_state::{ReadRequest, ReadResponse, ReadState};
 
 use crate::Error;
 
 const STATE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const SPENT_STATUS_CONCURRENCY: usize = 32;
 
 pub(super) struct Details {
     pub(super) next_block_hash: Option<Hash>,
@@ -152,21 +150,53 @@ where
         })
         .collect::<Vec<_>>();
 
-    stream::iter(outpoints)
-        .map(|outpoint| {
-            let read_state = read_state.clone();
-            async move {
-                let response =
-                    call(read_state, ReadRequest::IsTransparentOutputSpent(outpoint)).await?;
-                let ReadResponse::IsTransparentOutputSpent(spent) = response else {
-                    return Err(unexpected_response("IsTransparentOutputSpent"));
-                };
-                Ok((outpoint, spent))
-            }
+    let response = call(
+        read_state,
+        ReadRequest::ExplorerTransparentOutputSpends(outpoints.clone().into()),
+    )
+    .await?;
+    let ReadResponse::ExplorerTransparentOutputSpends(spent) = response else {
+        return Err(unexpected_response("ExplorerTransparentOutputSpends"));
+    };
+    Ok(outpoints.into_iter().zip(spent).collect())
+}
+
+pub(super) async fn load_transparent_inputs<State>(
+    read_state: State,
+    block: &Block,
+) -> Result<HashMap<OutPoint, Utxo>, Error>
+where
+    State: ReadState,
+{
+    let outpoints = block
+        .transactions
+        .iter()
+        .flat_map(|transaction| {
+            transaction
+                .inputs()
+                .iter()
+                .filter_map(|input| input.outpoint())
         })
-        .buffer_unordered(SPENT_STATUS_CONCURRENCY)
-        .try_collect()
-        .await
+        .collect::<Vec<_>>();
+    let response = call(
+        read_state,
+        ReadRequest::ExplorerTransparentOutputs(outpoints.clone().into()),
+    )
+    .await?;
+    let ReadResponse::ExplorerTransparentOutputs(outputs) = response else {
+        return Err(unexpected_response("ExplorerTransparentOutputs"));
+    };
+    outpoints
+        .into_iter()
+        .zip(outputs)
+        .map(|(outpoint, output)| {
+            output.map(|output| (outpoint, output)).ok_or_else(|| {
+                Error::StateResponse(format!(
+                    "state is missing historical transparent output {outpoint:?}"
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Rechecks canonical membership after the potentially large output-status query.

@@ -1,221 +1,133 @@
-//! Balance-ordered transparent-address ranking queries.
+//! Transparent balance ranking adapter backed by canonical state.
 
-use zakura_chain::block::{Hash, Height};
+use tower::ServiceExt;
+use zakura_state::{ExplorerBalanceRankCursor, ReadRequest, ReadResponse, ReadState};
 
 use crate::{
-    database::DatabaseColumn,
     types::{
         TopBalanceEntry, TopBalancesPagination, TopBalancesRequest, TopBalancesResponse,
         TopBalancesSummary,
     },
-    Error, Indexer,
+    Error,
 };
 
-use super::{
-    disk_format::{address_balance_order_key, decode_address_balance_order_key},
-    top_balances_cursor::TopBalancesCursor,
-};
+use super::top_balances_cursor::TopBalancesCursor;
 
 const DEFAULT_TOP_BALANCES_LIMIT: u32 = 100;
 const MAX_TOP_BALANCES_LIMIT: u32 = 100;
-const SUMMARY_ADDRESS_COUNT: usize = 100;
-const MAX_STABLE_READ_ATTEMPTS: usize = 3;
 
-impl Indexer {
-    /// Returns a stable cursor page ordered by descending transparent balance.
-    pub async fn top_balances(
-        &self,
-        request: TopBalancesRequest,
-    ) -> Result<TopBalancesResponse, Error> {
-        let indexer = self.clone();
-        tokio::task::spawn_blocking(move || indexer.top_balances_blocking(request))
-            .await
-            .map_err(|error| Error::Task(error.to_string()))?
+/// Returns a stable cursor page ordered by finalized transparent balance.
+pub async fn top_balances_from_state<State>(
+    read_state: State,
+    request: TopBalancesRequest,
+) -> Result<TopBalancesResponse, Error>
+where
+    State: ReadState,
+{
+    let limit = request.limit.unwrap_or(DEFAULT_TOP_BALANCES_LIMIT);
+    if !(1..=MAX_TOP_BALANCES_LIMIT).contains(&limit) {
+        return Err(Error::InvalidQuery(format!(
+            "top-balances limit must be between 1 and {MAX_TOP_BALANCES_LIMIT}"
+        )));
     }
-
-    fn top_balances_blocking(
-        &self,
-        request: TopBalancesRequest,
-    ) -> Result<TopBalancesResponse, Error> {
-        let limit = request.limit.unwrap_or(DEFAULT_TOP_BALANCES_LIMIT);
-        if !(1..=MAX_TOP_BALANCES_LIMIT).contains(&limit) {
-            return Err(Error::InvalidQuery(format!(
-                "top-balances limit must be between 1 and {MAX_TOP_BALANCES_LIMIT}"
-            )));
-        }
-        let cursor = request
-            .cursor
-            .as_deref()
-            .map(TopBalancesCursor::decode)
-            .transpose()?;
-
-        for _ in 0..MAX_STABLE_READ_ATTEMPTS {
-            let indexed_tip = self.indexed_block_tip()?;
-            if let Some(cursor) = cursor {
-                let Some((_, indexed_hash)) = indexed_tip else {
-                    return Err(Error::InvalidCursor(
-                        "top-balances cursor belongs to a non-empty index".to_string(),
-                    ));
-                };
-                if cursor.indexed_block_hash != indexed_hash {
-                    return Err(Error::InvalidCursor(
-                        "top-balances ranking changed; restart from the first page".to_string(),
-                    ));
-                }
-            }
-
-            let response = self.top_balances_at_tip(limit, cursor, indexed_tip)?;
-            if self.indexed_block_tip()? == indexed_tip {
-                return Ok(response);
-            }
-        }
-
-        Err(Error::Task(
-            "indexed chain changed repeatedly during top-balances query".to_string(),
-        ))
-    }
-
-    fn top_balances_at_tip(
-        &self,
-        limit: u32,
-        cursor: Option<TopBalancesCursor>,
-        indexed_tip: Option<(Height, Hash)>,
-    ) -> Result<TopBalancesResponse, Error> {
-        let cursor_key =
-            cursor.map(|cursor| address_balance_order_key(cursor.address, cursor.balance_zat));
-        if let Some(cursor_key) = cursor_key.as_ref() {
-            if self
-                .database
-                .get(DatabaseColumn::AddressBalanceOrder, cursor_key)?
-                .is_none()
-            {
-                return Err(Error::InvalidCursor(
-                    "top-balances cursor entry is no longer funded".to_string(),
-                ));
-            }
-        }
-
-        let limit_usize = usize::try_from(limit)
-            .map_err(|_| Error::Calculation("top-balances limit exceeds usize".to_string()))?;
-        let scan_limit = limit_usize
-            .checked_add(2)
-            .ok_or_else(|| Error::Calculation("top-balances scan limit overflow".to_string()))?;
-        let mut rows = self.database.scan_forward_from(
-            DatabaseColumn::AddressBalanceOrder,
-            cursor_key.as_deref().unwrap_or_default(),
-            scan_limit,
-        )?;
-        if let Some(cursor_key) = cursor_key.as_ref() {
-            if rows.first().map(|(key, _)| key) != Some(cursor_key) {
-                return Err(Error::InvalidCursor(
-                    "top-balances cursor entry is missing from its ranking position".to_string(),
-                ));
-            }
-            rows.remove(0);
-        }
-
-        let has_next = rows.len() > limit_usize;
-        rows.truncate(limit_usize);
-        let first_rank = cursor.map_or(Ok(1), |cursor| {
-            cursor.rank.checked_add(1).ok_or_else(|| {
-                Error::InvalidCursor("top-balances cursor rank overflow".to_string())
-            })
-        })?;
-        let entries = rows
-            .iter()
-            .enumerate()
-            .map(|(index, (key, _))| {
-                let (address, balance_zat) = decode_address_balance_order_key(key)?;
-                let offset = u64::try_from(index).map_err(|_| {
-                    Error::Calculation("top-balances page offset exceeds u64".to_string())
-                })?;
-                let rank = first_rank.checked_add(offset).ok_or_else(|| {
-                    Error::Calculation("top-balances rank exceeds u64".to_string())
-                })?;
-                Ok(TopBalanceEntry {
-                    rank,
-                    address: address.to_string(),
-                    balance_zat: balance_zat.to_string(),
-                })
-            })
-            .collect::<Result<Vec<_>, Error>>()?;
-
-        let chain_stats = self.chain_stats_record()?;
-        let transparent_supply = match indexed_tip {
-            Some((_, hash)) => {
-                self.indexed_block_record(hash)?
-                    .ok_or_else(|| {
-                        Error::CorruptData(
-                            "indexed tip is missing its top-balances supply record".to_string(),
-                        )
-                    })?
-                    .pool_transparent
-            }
-            None => 0,
-        };
-        let summary_rows = self.database.scan_forward_from(
-            DatabaseColumn::AddressBalanceOrder,
-            &[],
-            SUMMARY_ADDRESS_COUNT,
-        )?;
-        let mut top_10_balance = 0_u64;
-        let mut top_100_balance = 0_u64;
-        for (index, (key, _)) in summary_rows.iter().enumerate() {
-            let (_, balance) = decode_address_balance_order_key(key)?;
-            top_100_balance = top_100_balance.checked_add(balance).ok_or_else(|| {
-                Error::Calculation("top-100 transparent balance exceeds u64".to_string())
-            })?;
-            if index < 10 {
-                top_10_balance = top_10_balance.checked_add(balance).ok_or_else(|| {
-                    Error::Calculation("top-10 transparent balance exceeds u64".to_string())
-                })?;
-            }
-        }
-
-        let next_cursor = if has_next {
-            let last = entries.last().ok_or_else(|| {
-                Error::CorruptData("non-empty top-balances page has no last entry".to_string())
-            })?;
-            let (address, balance_zat) = decode_address_balance_order_key(
-                &rows
-                    .last()
-                    .expect("top-balances rows exist because the returned page is non-empty")
-                    .0,
-            )?;
-            let indexed_hash = indexed_tip
-                .map(|(_, hash)| hash)
-                .ok_or_else(|| Error::CorruptData("funded index has no chain tip".to_string()))?;
-            Some(TopBalancesCursor::new(address, balance_zat, last.rank, indexed_hash).encode())
-        } else {
-            None
-        };
-
-        Ok(TopBalancesResponse {
-            entries,
-            summary: TopBalancesSummary {
-                funded_transparent_address_count: chain_stats.funded_transparent_address_count,
-                transparent_supply_zat: transparent_supply.to_string(),
-                top_10_balance_zat: top_10_balance.to_string(),
-                top_10_concentration_percent: concentration_percent(
-                    top_10_balance,
-                    transparent_supply,
-                ),
-                top_100_balance_zat: top_100_balance.to_string(),
-                top_100_concentration_percent: concentration_percent(
-                    top_100_balance,
-                    transparent_supply,
-                ),
-            },
-            pagination: TopBalancesPagination {
-                limit,
-                total: chain_stats.funded_transparent_address_count.to_string(),
-                has_next,
-                next_cursor,
-            },
-            indexed_height: indexed_tip.map(|(height, _)| height.0.to_string()),
-            indexed_block_hash: indexed_tip.map(|(_, hash)| hash.to_string()),
+    let cursor = request
+        .cursor
+        .as_deref()
+        .map(TopBalancesCursor::decode)
+        .transpose()?;
+    let state_cursor = cursor.map(|cursor| ExplorerBalanceRankCursor {
+        address: cursor.address,
+        balance_zat: cursor.balance_zat,
+        rank: cursor.rank,
+        block_hash: cursor.indexed_block_hash,
+    });
+    let response = read_state
+        .oneshot(ReadRequest::ExplorerBalanceRankPage {
+            limit,
+            cursor: state_cursor,
         })
+        .await
+        .map_err(|error| Error::StateRequest(error.to_string()))?;
+    let ReadResponse::ExplorerBalanceRankPage(page) = response else {
+        return Err(Error::StateResponse(
+            "state returned the wrong response for top balances".to_string(),
+        ));
+    };
+    if !page.cursor_valid {
+        return Err(Error::InvalidCursor(
+            "top-balances ranking changed; restart from the first page".to_string(),
+        ));
     }
+
+    let first_rank = cursor.map_or(1, |cursor| {
+        cursor
+            .rank
+            .checked_add(1)
+            .expect("validated top-balances rank fits in u64")
+    });
+    let entries = page
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(offset, entry)| TopBalanceEntry {
+            rank: first_rank
+                .checked_add(u64::try_from(offset).expect("page offset fits in u64"))
+                .expect("top-balances rank fits in u64"),
+            address: entry.address.to_string(),
+            balance_zat: entry.balance_zat.to_string(),
+        })
+        .collect::<Vec<_>>();
+    let next_cursor = if page.has_more {
+        let last_entry = page
+            .entries
+            .last()
+            .expect("a page with more rows contains a last returned entry");
+        let last_rank = entries
+            .last()
+            .expect("a page with more rows contains a ranked entry")
+            .rank;
+        let block_hash = page
+            .best_tip
+            .map(|(_, hash)| hash)
+            .expect("a funded balance ranking has a finalized tip");
+        Some(
+            TopBalancesCursor::new(
+                last_entry.address,
+                last_entry.balance_zat,
+                last_rank,
+                block_hash,
+            )
+            .encode(),
+        )
+    } else {
+        None
+    };
+
+    Ok(TopBalancesResponse {
+        entries,
+        summary: TopBalancesSummary {
+            funded_transparent_address_count: page.funded_transparent_address_count,
+            transparent_supply_zat: page.transparent_supply_zat.to_string(),
+            top_10_balance_zat: page.top_10_balance_zat.to_string(),
+            top_10_concentration_percent: concentration_percent(
+                page.top_10_balance_zat,
+                page.transparent_supply_zat,
+            ),
+            top_100_balance_zat: page.top_100_balance_zat.to_string(),
+            top_100_concentration_percent: concentration_percent(
+                page.top_100_balance_zat,
+                page.transparent_supply_zat,
+            ),
+        },
+        pagination: TopBalancesPagination {
+            limit,
+            total: page.funded_transparent_address_count.to_string(),
+            has_next: page.has_more,
+            next_cursor,
+        },
+        indexed_height: page.best_tip.map(|(height, _)| height.0.to_string()),
+        indexed_block_hash: page.best_tip.map(|(_, hash)| hash.to_string()),
+    })
 }
 
 fn concentration_percent(balance: u64, transparent_supply: u64) -> String {

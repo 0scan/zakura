@@ -16,7 +16,7 @@ use crate::{
         BlockTransaction, BlockTransactionInput, BlockTransactionOutput, TransactionData,
         TransactionDetails, TransactionStatus,
     },
-    Error, Indexer,
+    Error,
 };
 
 use super::super::classify::{public_flow_amount, shielded_flow, shielded_pool, transaction_kind};
@@ -37,11 +37,11 @@ pub(super) struct TransactionChainStatus {
 }
 
 pub(crate) fn build_block_transactions(
-    indexer: &Indexer,
     network: &Network,
     block: &Block,
     height: Height,
     hash: Hash,
+    transparent_inputs: &HashMap<OutPoint, Utxo>,
     spent_outputs: &HashMap<OutPoint, bool>,
 ) -> Result<Vec<BlockTransaction>, Error> {
     block
@@ -51,7 +51,6 @@ pub(crate) fn build_block_transactions(
         .map(|(transaction_index, transaction)| {
             let transaction_index = count_u32(transaction_index, "transaction index")?;
             build_transaction(
-                indexer,
                 network,
                 transaction,
                 TransactionBlockContext {
@@ -62,6 +61,7 @@ pub(crate) fn build_block_transactions(
                     block_hash: hash,
                     block_time: block.header.time.timestamp(),
                 },
+                transparent_inputs,
                 spent_outputs,
             )
         })
@@ -69,15 +69,21 @@ pub(crate) fn build_block_transactions(
 }
 
 pub(super) fn build_transaction_details(
-    indexer: &Indexer,
     network: &Network,
     transaction: &Transaction,
     context: TransactionBlockContext,
     record: TransactionRecord,
     status: TransactionChainStatus,
+    transparent_inputs: &HashMap<OutPoint, Utxo>,
     spent_outputs: &HashMap<OutPoint, bool>,
 ) -> Result<TransactionDetails, Error> {
-    let response = build_transaction(indexer, network, transaction, context, spent_outputs)?;
+    let response = build_transaction(
+        network,
+        transaction,
+        context,
+        transparent_inputs,
+        spent_outputs,
+    )?;
     validate_indexed_record(transaction, record, &response)?;
 
     let amount_zat = public_flow_amount(&record)?;
@@ -102,10 +108,10 @@ pub(super) fn build_transaction_details(
 }
 
 fn build_transaction(
-    indexer: &Indexer,
     network: &Network,
     transaction: &Transaction,
     context: TransactionBlockContext,
+    transparent_inputs: &HashMap<OutPoint, Utxo>,
     spent_outputs: &HashMap<OutPoint, bool>,
 ) -> Result<BlockTransaction, Error> {
     let is_coinbase = transaction.is_coinbase();
@@ -118,25 +124,6 @@ fn build_transaction(
     }
 
     let txid = transaction.hash();
-    let spent_outpoints = transaction
-        .inputs()
-        .iter()
-        .filter_map(Input::outpoint)
-        .collect::<Vec<_>>();
-    let spent_utxos = spent_outpoints
-        .iter()
-        .copied()
-        .zip(indexer.transparent_outputs(&spent_outpoints)?)
-        .map(|(outpoint, utxo)| {
-            let utxo = utxo.ok_or_else(|| {
-                Error::CorruptData(format!(
-                    "missing indexed transparent output for {outpoint:?}"
-                ))
-            })?;
-            Ok((outpoint, utxo))
-        })
-        .collect::<Result<HashMap<OutPoint, Utxo>, Error>>()?;
-
     let inputs = transaction
         .inputs()
         .iter()
@@ -149,7 +136,7 @@ fn build_transaction(
             } => Some((outpoint, unlock_script, sequence)),
         })
         .map(|(outpoint, unlock_script, sequence)| {
-            let utxo = spent_utxos.get(outpoint).ok_or_else(|| {
+            let utxo = transparent_inputs.get(outpoint).ok_or_else(|| {
                 Error::CorruptData(format!(
                     "missing loaded transparent output for {outpoint:?}"
                 ))
@@ -194,11 +181,22 @@ fn build_transaction(
         })
         .collect::<Result<Vec<_>, Error>>()?;
 
-    let total_input = spent_utxos.values().try_fold(0_i64, |total, utxo| {
-        total
-            .checked_add(utxo.output.value().zatoshis())
-            .ok_or_else(|| Error::Calculation("transaction input total exceeds i64".to_string()))
-    })?;
+    let total_input = transaction
+        .inputs()
+        .iter()
+        .filter_map(Input::outpoint)
+        .try_fold(0_i64, |total, outpoint| {
+            let utxo = transparent_inputs.get(&outpoint).ok_or_else(|| {
+                Error::StateResponse(format!(
+                    "missing loaded transparent output for {outpoint:?}"
+                ))
+            })?;
+            total
+                .checked_add(utxo.output.value().zatoshis())
+                .ok_or_else(|| {
+                    Error::Calculation("transaction input total exceeds i64".to_string())
+                })
+        })?;
     let total_output = transaction
         .outputs()
         .iter()
@@ -211,7 +209,7 @@ fn build_transaction(
         (0, 0)
     } else {
         let transaction_value_balance = transaction
-            .value_balance(&spent_utxos)
+            .value_balance(transparent_inputs)
             .map_err(|error| Error::Calculation(error.to_string()))?;
         let fee = transaction_value_balance
             .remaining_transaction_value()

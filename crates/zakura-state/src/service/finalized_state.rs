@@ -28,6 +28,12 @@ use zakura_chain::{
     parameters::{Network, NetworkUpgrade},
     sapling,
 };
+#[cfg(feature = "indexer")]
+use zakura_db::explorer::{
+    EXPLORER_ADDRESS_META, EXPLORER_BALANCE_ORDER, EXPLORER_BLOCK_STATS, EXPLORER_CHAIN_STATS,
+    EXPLORER_DAILY_STATS, EXPLORER_SHIELDED_TRANSACTION_BY_CLASS_LOC,
+    EXPLORER_TRANSACTION_BY_KIND_LOC, EXPLORER_TRANSACTION_META_BY_LOC,
+};
 use zakura_db::{
     block::{RetentionPlan, ZAKURA_HEADER_BODY_SIZE_BY_HEIGHT},
     chain::BLOCK_INFO,
@@ -109,6 +115,11 @@ pub use commitment_aux::{
 };
 #[allow(unused_imports)]
 pub use disk_db::{DiskDb, DiskWriteBatch, ReadDisk, WriteDisk};
+#[cfg(feature = "indexer")]
+pub use disk_format::explorer::{
+    ExplorerAddressRecord, ExplorerShieldedFlow, ExplorerShieldedPool, ExplorerTransactionKind,
+    ExplorerTransactionRecord,
+};
 #[allow(unused_imports)]
 pub use disk_format::{
     FallibleDiskValue, FromDisk, IntoDisk, OutputLocation, RawBytes, TransactionIndex,
@@ -141,6 +152,10 @@ pub use vct_treestate_audit::{
 };
 #[allow(unused_imports)]
 pub use zakura_db::commitment_roots_db::{CommitmentRootIndexIssue, COMMITMENT_ROOTS_BY_HEIGHT};
+#[cfg(feature = "indexer")]
+pub(crate) use zakura_db::explorer::{
+    explorer_transaction_record_with_ordered_utxos, explorer_transaction_record_with_utxos,
+};
 #[allow(unused_imports)]
 pub use zakura_db::highest_completed_checkpoint::*;
 pub use zakura_db::ZakuraDb;
@@ -190,6 +205,22 @@ pub const STATE_COLUMN_FAMILIES_IN_CODE: &[&str] = &[
     "tx_by_loc",
     "hash_by_tx_loc",
     "tx_loc_by_hash",
+    #[cfg(feature = "indexer")]
+    EXPLORER_TRANSACTION_META_BY_LOC,
+    #[cfg(feature = "indexer")]
+    EXPLORER_TRANSACTION_BY_KIND_LOC,
+    #[cfg(feature = "indexer")]
+    EXPLORER_SHIELDED_TRANSACTION_BY_CLASS_LOC,
+    #[cfg(feature = "indexer")]
+    EXPLORER_ADDRESS_META,
+    #[cfg(feature = "indexer")]
+    EXPLORER_BLOCK_STATS,
+    #[cfg(feature = "indexer")]
+    EXPLORER_CHAIN_STATS,
+    #[cfg(feature = "indexer")]
+    EXPLORER_DAILY_STATS,
+    #[cfg(feature = "indexer")]
+    EXPLORER_BALANCE_ORDER,
     // Transparent
     BALANCE_BY_TRANSPARENT_ADDR,
     "tx_loc_by_transparent_addr_loc",

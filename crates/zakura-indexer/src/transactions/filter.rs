@@ -21,6 +21,7 @@ pub enum TransactionKindFilter {
 }
 
 impl TransactionKindFilter {
+    #[cfg(feature = "state-index")]
     pub(super) const fn tag(self) -> u8 {
         match self {
             Self::All => 0,
@@ -49,6 +50,7 @@ pub enum ShieldedFlowFilter {
 }
 
 impl ShieldedFlowFilter {
+    #[cfg(feature = "state-index")]
     pub(super) const fn tag(self) -> u8 {
         match self {
             Self::All => 0,
@@ -80,6 +82,7 @@ pub enum ShieldedPoolFilter {
 }
 
 impl ShieldedPoolFilter {
+    #[cfg(feature = "state-index")]
     pub(super) const fn tag(self) -> u8 {
         match self {
             Self::All => 0,
@@ -107,6 +110,7 @@ pub enum AmountFilter {
 }
 
 impl AmountFilter {
+    #[cfg(feature = "state-index")]
     pub(super) const fn tag(self) -> u8 {
         match self {
             Self::Any => 0,
@@ -210,11 +214,7 @@ impl TransactionQuery {
         Ok(self)
     }
 
-    pub(super) fn uses_shielded_index(self) -> bool {
-        self.kind == TransactionKindFilter::Shielded
-            && (self.flow.tag() != 0 || self.pool.tag() != 0 || self.amount.tag() != 0)
-    }
-
+    #[cfg(feature = "state-index")]
     pub(super) const fn cursor_tags(self) -> [u8; 4] {
         [
             self.kind.tag(),

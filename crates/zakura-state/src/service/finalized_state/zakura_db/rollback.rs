@@ -56,6 +56,9 @@ use crate::{
     Config, SemanticallyVerifiedBlock,
 };
 
+#[cfg(feature = "indexer")]
+use crate::service::finalized_state::zakura_db::explorer::PendingExplorerAddressRecords;
+
 /// Options for rolling back the finalized state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RollbackFinalizedStateOptions {
@@ -465,6 +468,10 @@ fn prepare_rollback(
 
     let mut batch = DiskWriteBatch::new();
     let mut address_balances = HashMap::new();
+    #[cfg(feature = "indexer")]
+    let mut explorer_address_records = PendingExplorerAddressRecords::new();
+    #[cfg(feature = "indexer")]
+    let mut removed_explorer_heights = Vec::new();
     let mut removed_blocks = Vec::new();
     let mut removed_blocks_have_sprout_commitments = false;
 
@@ -483,6 +490,8 @@ fn prepare_rollback(
             network,
             &mut batch,
             &mut address_balances,
+            #[cfg(feature = "indexer")]
+            &mut explorer_address_records,
             height,
             &block,
         )?;
@@ -491,6 +500,8 @@ fn prepare_rollback(
 
         removed_blocks_have_sprout_commitments |= block_has_sprout_commitments(&block);
         removed_blocks.push(semantically_verified);
+        #[cfg(feature = "indexer")]
+        removed_explorer_heights.push(height);
     }
 
     let target_treestate = prepare_target_treestate(
@@ -500,6 +511,18 @@ fn prepare_rollback(
         removed_blocks_have_sprout_commitments,
     )?;
 
+    #[cfg(feature = "indexer")]
+    {
+        let funded_transparent_address_count =
+            batch.prepare_explorer_balance_order_rollback(db, &address_balances);
+        batch.prepare_explorer_analytics_rollback(
+            db,
+            &removed_explorer_heights,
+            options.target_height,
+            funded_transparent_address_count,
+        );
+        batch.prepare_explorer_address_rollback_writes(db, explorer_address_records);
+    }
     write_address_balances(db, &mut batch, address_balances);
     reset_tip_trees(db, &mut batch, &target_treestate);
     reset_value_pool(db, &mut batch, &target_value_pool);
@@ -740,6 +763,7 @@ fn reverse_transparent_block(
     network: &Network,
     batch: &mut DiskWriteBatch,
     address_balances: &mut HashMap<transparent::Address, Option<AddressBalanceLocation>>,
+    #[cfg(feature = "indexer")] explorer_address_records: &mut PendingExplorerAddressRecords,
     height: Height,
     block: &Arc<Block>,
 ) -> Result<(), RollbackFinalizedStateError> {
@@ -754,6 +778,8 @@ fn reverse_transparent_block(
     // below cannot spuriously overflow or underflow.
     for (tx_index, transaction) in block.transactions.iter().enumerate().rev() {
         let tx_location = TransactionLocation::from_usize(height, tx_index);
+        #[cfg(feature = "indexer")]
+        let mut explorer_addresses = HashSet::new();
 
         // Un-credit the outputs this transaction created.
         for (output_index, output) in transaction.outputs().iter().enumerate() {
@@ -761,6 +787,8 @@ fn reverse_transparent_block(
                 OutputLocation::from_usize(height, tx_index, output_index);
 
             if let Some(address) = output.address(network) {
+                #[cfg(feature = "indexer")]
+                explorer_addresses.insert(address);
                 let address_location =
                     cached_address_balance(db, address_balances, &address)?.address_location();
 
@@ -788,6 +816,8 @@ fn reverse_transparent_block(
             let (spent_output_location, spent_utxo) = finalized_output(db, &spent_outpoint)?;
 
             if let Some(address) = spent_utxo.output.address(network) {
+                #[cfg(feature = "indexer")]
+                explorer_addresses.insert(address);
                 let address_location =
                     cached_address_balance(db, address_balances, &address)?.address_location();
 
@@ -812,6 +842,16 @@ fn reverse_transparent_block(
             batch.zs_delete(
                 db.db.cf_handle(TX_LOC_BY_SPENT_OUT_LOC).unwrap(),
                 spent_output_location,
+            );
+        }
+
+        #[cfg(feature = "indexer")]
+        for address in explorer_addresses {
+            DiskWriteBatch::prepare_explorer_address_rollback(
+                db,
+                explorer_address_records,
+                address,
+                tx_location,
             );
         }
     }
@@ -963,6 +1003,9 @@ fn delete_block_and_transaction_data(
         let tx_hash = db
             .transaction_hash(tx_location)
             .ok_or(RollbackFinalizedStateError::MissingBlock { height })?;
+
+        #[cfg(feature = "indexer")]
+        batch.prepare_explorer_transaction_rollback(db, tx_location);
 
         batch.zs_delete(db.db.cf_handle("tx_by_loc").unwrap(), tx_location);
         batch.zs_delete(db.db.cf_handle("hash_by_tx_loc").unwrap(), tx_location);

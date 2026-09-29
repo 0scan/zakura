@@ -1,9 +1,8 @@
-//! Canonical-chain aggregate maintenance and bounded rolling queries.
+//! Canonical-state analytics response adapters.
 
 mod chart;
-mod disk_format;
+mod date;
 mod query;
-mod write;
 
-pub(crate) use disk_format::{day_key, day_number};
-pub(crate) use write::BlockTransactionStats;
+pub use chart::chart_data_from_state;
+pub use query::stats_from_state;

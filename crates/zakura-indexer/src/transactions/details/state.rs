@@ -2,13 +2,12 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use futures::{stream, StreamExt, TryStreamExt};
 use tokio::time;
 use tower::ServiceExt;
 use zakura_chain::{
     block::{Hash, Height},
     transaction::{Hash as TransactionHash, Transaction},
-    transparent::OutPoint,
+    transparent::{OutPoint, Utxo},
 };
 use zakura_state::{MinedTx, ReadRequest, ReadResponse, ReadState};
 
@@ -17,7 +16,6 @@ use crate::Error;
 use super::response::TransactionChainStatus;
 
 const STATE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const SPENT_STATUS_CONCURRENCY: usize = 32;
 
 pub(super) async fn transaction<State>(
     read_state: State,
@@ -31,6 +29,20 @@ where
         return Err(unexpected_response("Transaction"));
     };
     Ok(transaction)
+}
+
+pub(super) async fn transaction_summary<State>(
+    read_state: State,
+    txid: TransactionHash,
+) -> Result<Option<zakura_state::ExplorerTransactionSummary>, Error>
+where
+    State: ReadState,
+{
+    let response = call(read_state, ReadRequest::ExplorerTransactionSummary(txid)).await?;
+    let ReadResponse::ExplorerTransactionSummary(summary) = response else {
+        return Err(unexpected_response("ExplorerTransactionSummary"));
+    };
+    Ok(summary)
 }
 
 pub(super) async fn chain_status<State>(
@@ -47,7 +59,7 @@ where
     )?;
 
     let ReadResponse::Depth(Some(depth)) = depth_response else {
-        return Err(Error::TransactionNotIndexed(
+        return Err(Error::ExplorerDataUnavailable(
             "transaction left the best chain while details were being assembled".to_string(),
         ));
     };
@@ -76,21 +88,48 @@ where
         .map(|output_index| OutPoint::from_usize(transaction_hash, output_index))
         .collect::<Vec<_>>();
 
-    stream::iter(outpoints)
-        .map(|outpoint| {
-            let read_state = read_state.clone();
-            async move {
-                let response =
-                    call(read_state, ReadRequest::IsTransparentOutputSpent(outpoint)).await?;
-                let ReadResponse::IsTransparentOutputSpent(spent) = response else {
-                    return Err(unexpected_response("IsTransparentOutputSpent"));
-                };
-                Ok((outpoint, spent))
-            }
+    let response = call(
+        read_state,
+        ReadRequest::ExplorerTransparentOutputSpends(outpoints.clone().into()),
+    )
+    .await?;
+    let ReadResponse::ExplorerTransparentOutputSpends(spent) = response else {
+        return Err(unexpected_response("ExplorerTransparentOutputSpends"));
+    };
+    Ok(outpoints.into_iter().zip(spent).collect())
+}
+
+pub(super) async fn transparent_inputs<State>(
+    read_state: State,
+    transaction: &Transaction,
+) -> Result<HashMap<OutPoint, Utxo>, Error>
+where
+    State: ReadState,
+{
+    let outpoints = transaction
+        .inputs()
+        .iter()
+        .filter_map(|input| input.outpoint())
+        .collect::<Vec<_>>();
+    let response = call(
+        read_state,
+        ReadRequest::ExplorerTransparentOutputs(outpoints.clone().into()),
+    )
+    .await?;
+    let ReadResponse::ExplorerTransparentOutputs(outputs) = response else {
+        return Err(unexpected_response("ExplorerTransparentOutputs"));
+    };
+    outpoints
+        .into_iter()
+        .zip(outputs)
+        .map(|(outpoint, output)| {
+            output.map(|output| (outpoint, output)).ok_or_else(|| {
+                Error::StateResponse(format!(
+                    "state is missing historical transparent output {outpoint:?}"
+                ))
+            })
         })
-        .buffer_unordered(SPENT_STATUS_CONCURRENCY)
-        .try_collect()
-        .await
+        .collect()
 }
 
 async fn call<State>(read_state: State, request: ReadRequest) -> Result<ReadResponse, Error>

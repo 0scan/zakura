@@ -491,6 +491,12 @@ impl Chain {
         })
     }
 
+    /// Returns the best-chain location of `hash` in this non-finalized chain.
+    #[cfg(feature = "indexer")]
+    pub fn transaction_location(&self, hash: transaction::Hash) -> Option<TransactionLocation> {
+        self.tx_loc_by_hash.get(&hash).copied()
+    }
+
     /// Returns the [`Transaction`] at [`TransactionLocation`], if it exists in this chain.
     #[allow(dead_code)]
     pub fn transaction_by_loc(&self, tx_loc: TransactionLocation) -> Option<&Arc<Transaction>> {

@@ -2,7 +2,8 @@
 
 mod cursor;
 mod details;
-mod disk_format;
 mod miner_attribution;
 mod query;
-mod write;
+
+pub use details::block_details_from_state;
+pub use query::blocks_page_from_state;

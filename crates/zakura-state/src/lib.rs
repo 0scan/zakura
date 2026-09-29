@@ -32,6 +32,8 @@ mod header_chain;
 pub mod arbitrary;
 
 mod error;
+#[cfg(feature = "indexer")]
+mod explorer;
 mod request;
 mod response;
 mod service;
@@ -53,6 +55,16 @@ pub use error::{
     CommitSemanticallyVerifiedError, DuplicateNullifierError, HistoricalSubtreeUnavailable,
     HistoricalSubtreeUnavailableReason, HistoricalTreeUnavailable, MissingSproutTipTree,
     StateInitError, ValidateContextError,
+};
+#[cfg(feature = "indexer")]
+pub use explorer::{
+    ExplorerAddressPage, ExplorerAddressRecord, ExplorerAmountFilter, ExplorerBalanceRankCursor,
+    ExplorerBalanceRankEntry, ExplorerBalanceRankPage, ExplorerBlockStats, ExplorerBlockSummary,
+    ExplorerChainStats, ExplorerDailyStats, ExplorerIntervalStats, ExplorerPageDirection,
+    ExplorerRollingStats, ExplorerShieldedFlow, ExplorerShieldedFlowFilter, ExplorerShieldedPool,
+    ExplorerShieldedPoolFilter, ExplorerStatsSnapshot, ExplorerTransactionKind,
+    ExplorerTransactionKindFilter, ExplorerTransactionPage, ExplorerTransactionQuery,
+    ExplorerTransactionRecord, ExplorerTransactionSummary,
 };
 pub use header_chain::*;
 pub use request::{

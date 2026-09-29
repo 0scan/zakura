@@ -57,7 +57,7 @@ pub struct RollingDayStats {
     pub average_transactions_per_block: Option<String>,
 }
 
-/// Indexer-owned statistics at one canonical indexed tip.
+/// Explorer statistics at one canonical finalized tip.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 pub struct IndexerStats {
     /// Highest indexed canonical block height.

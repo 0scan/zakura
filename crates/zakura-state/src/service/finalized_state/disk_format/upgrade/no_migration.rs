@@ -14,6 +14,7 @@ use super::{CancelFormatChange, DiskFormatUpgrade, FormatChangeError};
 pub struct NoMigration {
     description: &'static str,
     version: Version,
+    reusable_major_upgrade: bool,
 }
 
 impl NoMigration {
@@ -22,6 +23,17 @@ impl NoMigration {
         Self {
             description,
             version,
+            reusable_major_upgrade: true,
+        }
+    }
+
+    /// Creates a format boundary that must start with a fresh database directory.
+    #[cfg(feature = "indexer")]
+    pub fn new_non_reusable_major(description: &'static str, version: Version) -> Self {
+        Self {
+            description,
+            version,
+            reusable_major_upgrade: false,
         }
     }
 }
@@ -47,5 +59,9 @@ impl DiskFormatUpgrade for NoMigration {
 
     fn needs_migration(&self) -> bool {
         false
+    }
+
+    fn is_reusable_major_upgrade(&self) -> bool {
+        self.reusable_major_upgrade && self.version.minor == 0 && self.version.patch == 0
     }
 }

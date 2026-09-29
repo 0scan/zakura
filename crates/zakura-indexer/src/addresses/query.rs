@@ -1,284 +1,73 @@
 //! Address summary reads and newest-first canonical transaction history.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
+use tower::ServiceExt;
 use zakura_chain::{
-    block::{Hash, Height},
-    transparent::Address,
+    block::Hash, parameters::Network, transaction::Transaction, transparent::Address,
+};
+use zakura_state::{
+    ExplorerPageDirection, ExplorerTransactionSummary, ReadRequest, ReadResponse, ReadState,
+    TransactionLocation,
 };
 
 use crate::{
-    database::{decode_trailing_transaction_position, DatabaseColumn},
-    models::{AddressEffect, TransactionAddressEffects, TransactionPosition, TransactionRecord},
+    models::{TransactionPosition, TransactionRecord},
     transactions::{shielded_flow, shielded_pool, transaction_kind},
     types::{
         AddressActivity, AddressFirstFunding, AddressSummary, AddressTransactionListItem,
         AddressTransactionsPagination, AddressTransactionsResponse, PageDirection,
     },
-    Error, Indexer,
+    Error,
 };
 
 use super::{
     cursor::AddressTransactionCursor,
-    disk_format::{address_order_key, address_order_prefix, newest_address_order_key},
+    effects::{derive_address_effects, AddressEffect, TransactionAddressEffects},
 };
 
 const DEFAULT_QUERY_LIMIT: u32 = 25;
 const MAX_QUERY_LIMIT: u32 = 100;
 
-impl Indexer {
-    /// Returns compact general information for one transparent address.
-    pub async fn address_summary(&self, address: Address) -> Result<AddressSummary, Error> {
-        let indexer = self.clone();
-        tokio::task::spawn_blocking(move || indexer.address_summary_blocking(address))
-            .await
-            .map_err(|error| Error::Task(error.to_string()))?
-    }
-
-    /// Returns one cursor-paginated page of canonical transactions for an address.
-    pub async fn address_transactions_page(
-        &self,
-        address: Address,
-        limit: Option<u32>,
-        cursor: Option<String>,
-        direction: PageDirection,
-    ) -> Result<AddressTransactionsResponse, Error> {
-        let indexer = self.clone();
-        tokio::task::spawn_blocking(move || {
-            indexer.address_transactions_page_blocking(address, limit, cursor, direction)
-        })
-        .await
-        .map_err(|error| Error::Task(error.to_string()))?
-    }
-
-    fn address_summary_blocking(&self, address: Address) -> Result<AddressSummary, Error> {
-        let indexed_tip = self.indexed_block_tip()?;
-        let Some(record) = self.address_record(address)? else {
-            return Ok(AddressSummary {
-                address: address.to_string(),
-                balance_zat: "0".to_string(),
-                total_received_zat: "0".to_string(),
-                total_sent_zat: "0".to_string(),
-                transaction_count: "0".to_string(),
-                first_seen: None,
-                last_seen: None,
-                first_funding: None,
-                indexed_height: indexed_tip.map(|(height, _)| height.0.to_string()),
-                indexed_block_hash: indexed_tip.map(|(_, hash)| hash.to_string()),
-            });
-        };
-
-        let balance_zat = record
-            .total_received_zat
-            .checked_sub(record.total_sent_zat)
-            .ok_or_else(|| {
-                Error::CorruptData(format!(
-                    "address {} sent total exceeds its received total",
-                    address
-                ))
-            })?;
-        let first_seen = self.address_activity(record.first_position)?;
-        let last_seen = self.address_activity(record.last_position)?;
-        let first_funding = record
-            .first_funding_position
-            .map(|position| self.address_first_funding(address, position))
-            .transpose()?;
-
-        Ok(AddressSummary {
+/// Returns a transparent-address summary directly from canonical node state.
+pub async fn address_summary_from_state<State>(
+    read_state: State,
+    network: &Network,
+    address: Address,
+) -> Result<AddressSummary, Error>
+where
+    State: ReadState,
+{
+    let page = load_address_page(
+        read_state.clone(),
+        address,
+        1,
+        None,
+        ExplorerPageDirection::Older,
+    )
+    .await?;
+    let indexed_tip = page.best_tip;
+    let Some(activity) = page.activity else {
+        return Ok(AddressSummary {
             address: address.to_string(),
-            balance_zat: balance_zat.to_string(),
-            total_received_zat: record.total_received_zat.to_string(),
-            total_sent_zat: record.total_sent_zat.to_string(),
-            transaction_count: record.transaction_count.to_string(),
-            first_seen: Some(first_seen),
-            last_seen: Some(last_seen),
-            first_funding,
+            balance_zat: "0".to_string(),
+            total_received_zat: "0".to_string(),
+            total_sent_zat: "0".to_string(),
+            transaction_count: "0".to_string(),
+            first_seen: None,
+            last_seen: None,
+            first_funding: None,
             indexed_height: indexed_tip.map(|(height, _)| height.0.to_string()),
             indexed_block_hash: indexed_tip.map(|(_, hash)| hash.to_string()),
-        })
-    }
+        });
+    };
 
-    fn address_transactions_page_blocking(
-        &self,
-        address: Address,
-        limit: Option<u32>,
-        cursor: Option<String>,
-        direction: PageDirection,
-    ) -> Result<AddressTransactionsResponse, Error> {
-        let limit = limit
-            .unwrap_or(DEFAULT_QUERY_LIMIT)
-            .clamp(1, MAX_QUERY_LIMIT);
-        let cursor = cursor
-            .map(|encoded| AddressTransactionCursor::decode(&encoded))
-            .transpose()?;
-        if direction == PageDirection::Previous && cursor.is_none() {
-            return Err(Error::InvalidCursor(
-                "direction=prev requires a cursor".to_string(),
-            ));
-        }
-        if let Some(cursor) = cursor {
-            if cursor.address != address {
-                return Err(Error::InvalidCursor(
-                    "address cursor was created for a different address".to_string(),
-                ));
-            }
-            if self.canonical_block_hash(cursor.position.height)? != Some(cursor.block_hash) {
-                return Err(Error::InvalidCursor(
-                    "cursor block is no longer on the indexed canonical chain".to_string(),
-                ));
-            }
-            if self
-                .database
-                .get(
-                    DatabaseColumn::AddressTransactionOrder,
-                    address_order_key(address, cursor.position),
-                )?
-                .is_none()
-            {
-                return Err(Error::InvalidCursor(
-                    "cursor transaction no longer belongs to this address".to_string(),
-                ));
-            }
-        }
-
-        let prefix = address_order_prefix(address);
-        let start_key = cursor.map_or_else(
-            || newest_address_order_key(address),
-            |cursor| address_order_key(address, cursor.position),
-        );
-        let requested = usize::try_from(limit)
-            .map_err(|_| Error::Calculation("address query limit exceeds usize".to_string()))?;
-        let scan_limit = requested
-            .checked_add(2)
-            .ok_or_else(|| Error::Calculation("address scan limit overflow".to_string()))?;
-        let entries = match direction {
-            PageDirection::Next => self.database.scan_prefix_reverse_from(
-                DatabaseColumn::AddressTransactionOrder,
-                &prefix,
-                &start_key,
-                scan_limit,
-            )?,
-            PageDirection::Previous => self.database.scan_prefix_forward_from(
-                DatabaseColumn::AddressTransactionOrder,
-                &prefix,
-                &start_key,
-                scan_limit,
-            )?,
-        };
-        let mut entries = entries
-            .into_iter()
-            .filter(|(key, _)| cursor.is_none() || key.as_slice() != start_key.as_slice())
-            .collect::<Vec<_>>();
-        let has_more_in_direction = entries.len() > requested;
-        entries.truncate(requested);
-        if direction == PageDirection::Previous {
-            entries.reverse();
-        }
-
-        let mut block_cache = HashMap::new();
-        let mut matched = Vec::with_capacity(entries.len());
-        for (key, _) in entries {
-            let position = decode_trailing_transaction_position(&key)?;
-            let txid = self.canonical_transaction_hash(position)?.ok_or_else(|| {
-                Error::CorruptData(format!(
-                    "missing canonical transaction at height {}, index {}",
-                    position.height.0, position.transaction_index
-                ))
-            })?;
-            let record = self.transaction_record(txid)?.ok_or_else(|| {
-                Error::CorruptData(format!("missing transaction record for {txid}"))
-            })?;
-            if record.position != position {
-                return Err(Error::CorruptData(format!(
-                    "transaction {txid} record position does not match address order"
-                )));
-            }
-            let effects = self.transaction_address_effects(position)?.ok_or_else(|| {
-                Error::CorruptData(format!(
-                    "missing address effects at height {}, index {}",
-                    position.height.0, position.transaction_index
-                ))
-            })?;
-            let effect = effects
-                .effects
-                .iter()
-                .find(|effect| effect.address == address)
-                .copied()
-                .ok_or_else(|| {
-                    Error::CorruptData("address order entry has no matching effect".to_string())
-                })?;
-            let (block_hash, block_time) =
-                self.address_transaction_block_fields(position.height, &mut block_cache)?;
-            let item = address_transaction_item(
-                address,
-                txid.to_string(),
-                block_hash,
-                block_time,
-                record,
-                effect,
-                &effects,
-            )?;
-            matched.push((position, block_hash, item));
-        }
-
-        let has_rows = !matched.is_empty();
-        let (has_next, has_prev) = match direction {
-            PageDirection::Next => (has_more_in_direction, cursor.is_some() && has_rows),
-            PageDirection::Previous => (cursor.is_some() && has_rows, has_more_in_direction),
-        };
-        let next_cursor = matched
-            .last()
-            .filter(|_| has_next)
-            .map(|(position, block_hash, _)| {
-                AddressTransactionCursor::new(address, *position, *block_hash).encode()
-            });
-        let prev_cursor = matched
-            .first()
-            .filter(|_| has_prev)
-            .map(|(position, block_hash, _)| {
-                AddressTransactionCursor::new(address, *position, *block_hash).encode()
-            });
-
-        Ok(AddressTransactionsResponse {
-            address: address.to_string(),
-            transactions: matched.into_iter().map(|(_, _, item)| item).collect(),
-            pagination: AddressTransactionsPagination {
-                limit,
-                has_next,
-                has_prev,
-                next_cursor,
-                prev_cursor,
-            },
-        })
-    }
-
-    fn address_activity(&self, position: TransactionPosition) -> Result<AddressActivity, Error> {
-        let txid = self.canonical_transaction_hash(position)?.ok_or_else(|| {
-            Error::CorruptData("address activity is missing its canonical transaction".to_string())
-        })?;
-        let block_hash = self.canonical_block_hash(position.height)?.ok_or_else(|| {
-            Error::CorruptData("address activity is missing its canonical block".to_string())
-        })?;
-        let block = self.block_record(block_hash)?.ok_or_else(|| {
-            Error::CorruptData("address activity is missing its block record".to_string())
-        })?;
-        Ok(AddressActivity {
-            txid: txid.to_string(),
-            block_height: position.height.0.to_string(),
-            block_hash: block_hash.to_string(),
-            block_time: block.timestamp,
-            transaction_index: position.transaction_index,
-        })
-    }
-
-    fn address_first_funding(
-        &self,
-        address: Address,
-        position: TransactionPosition,
-    ) -> Result<AddressFirstFunding, Error> {
-        let effects = self.transaction_address_effects(position)?.ok_or_else(|| {
-            Error::CorruptData("first funding transaction is missing address effects".to_string())
-        })?;
+    let first_funding = if let Some(summary) = page.first_funding.as_ref() {
+        let mut effects =
+            load_address_effects(read_state, network, std::slice::from_ref(summary)).await?;
+        let effects = effects
+            .pop()
+            .expect("one requested transaction has one address-effect result");
         let received_zat = effects
             .effects
             .iter()
@@ -288,32 +77,265 @@ impl Indexer {
             .ok_or_else(|| {
                 Error::CorruptData("first funding transaction did not fund the address".to_string())
             })?;
-        let funder_address = largest_effect_address(&effects, address, EffectSide::Sent);
-
-        Ok(AddressFirstFunding {
-            activity: self.address_activity(position)?,
+        Some(AddressFirstFunding {
+            activity: address_activity(summary),
             amount_zat: received_zat.to_string(),
-            funder_address,
-            is_coinbase: position.transaction_index == 0,
+            funder_address: largest_effect_address(&effects, address, EffectSide::Sent),
+            is_coinbase: summary.location.index.as_usize() == 0,
         })
+    } else {
+        None
+    };
+    let total_sent_zat = page
+        .received_zat
+        .checked_sub(page.balance_zat)
+        .ok_or_else(|| {
+            Error::CorruptData("address balance exceeds its total received value".to_string())
+        })?;
+
+    Ok(AddressSummary {
+        address: address.to_string(),
+        balance_zat: page.balance_zat.to_string(),
+        total_received_zat: page.received_zat.to_string(),
+        total_sent_zat: total_sent_zat.to_string(),
+        transaction_count: activity.transaction_count.to_string(),
+        first_seen: page.first_seen.as_ref().map(address_activity),
+        last_seen: page.last_seen.as_ref().map(address_activity),
+        first_funding,
+        indexed_height: indexed_tip.map(|(height, _)| height.0.to_string()),
+        indexed_block_hash: indexed_tip.map(|(_, hash)| hash.to_string()),
+    })
+}
+
+/// Returns a cursor-paginated transparent-address history from canonical node state.
+pub async fn address_transactions_page_from_state<State>(
+    read_state: State,
+    network: &Network,
+    address: Address,
+    limit: Option<u32>,
+    cursor: Option<String>,
+    direction: PageDirection,
+) -> Result<AddressTransactionsResponse, Error>
+where
+    State: ReadState,
+{
+    let limit = limit
+        .unwrap_or(DEFAULT_QUERY_LIMIT)
+        .clamp(1, MAX_QUERY_LIMIT);
+    let cursor = cursor
+        .map(|encoded| AddressTransactionCursor::decode(&encoded))
+        .transpose()?;
+    if direction == PageDirection::Previous && cursor.is_none() {
+        return Err(Error::InvalidCursor(
+            "direction=prev requires a cursor".to_string(),
+        ));
+    }
+    if let Some(cursor) = cursor {
+        if cursor.address != address {
+            return Err(Error::InvalidCursor(
+                "address cursor was created for a different address".to_string(),
+            ));
+        }
+        let response = read_state
+            .clone()
+            .oneshot(ReadRequest::BlockHeader(cursor.position.height.into()))
+            .await
+            .map_err(|_| {
+                Error::InvalidCursor("cursor block is no longer on the canonical chain".to_string())
+            })?;
+        let ReadResponse::BlockHeader { hash, .. } = response else {
+            return Err(Error::StateResponse(
+                "state returned the wrong response for a block-header request".to_string(),
+            ));
+        };
+        if hash != cursor.block_hash {
+            return Err(Error::InvalidCursor(
+                "cursor block is no longer on the canonical chain".to_string(),
+            ));
+        }
     }
 
-    fn address_transaction_block_fields(
-        &self,
-        height: Height,
-        cache: &mut HashMap<u32, (Hash, String)>,
-    ) -> Result<(Hash, String), Error> {
-        if let Some((hash, timestamp)) = cache.get(&height.0) {
-            return Ok((*hash, timestamp.clone()));
-        }
-        let hash = self.canonical_block_hash(height)?.ok_or_else(|| {
-            Error::CorruptData(format!("missing canonical block at height {}", height.0))
-        })?;
-        let block = self.block_record(hash)?.ok_or_else(|| {
-            Error::CorruptData(format!("missing block record for canonical hash {hash}"))
-        })?;
-        cache.insert(height.0, (hash, block.timestamp.clone()));
-        Ok((hash, block.timestamp))
+    let state_direction = match direction {
+        PageDirection::Next => ExplorerPageDirection::Older,
+        PageDirection::Previous => ExplorerPageDirection::Newer,
+    };
+    let page = load_address_page(
+        read_state.clone(),
+        address,
+        limit,
+        cursor.map(|cursor| {
+            TransactionLocation::from_u64(
+                cursor.position.height,
+                u64::from(cursor.position.transaction_index),
+            )
+        }),
+        state_direction,
+    )
+    .await?;
+    if !page.cursor_valid {
+        return Err(Error::InvalidCursor(
+            "cursor transaction no longer belongs to this address".to_string(),
+        ));
+    }
+
+    let effects = load_address_effects(read_state, network, &page.transactions).await?;
+    let has_rows = !page.transactions.is_empty();
+    let (has_next, has_prev) = match direction {
+        PageDirection::Next => (page.has_more, cursor.is_some() && has_rows),
+        PageDirection::Previous => (cursor.is_some() && has_rows, page.has_more),
+    };
+    let mut matched = Vec::with_capacity(page.transactions.len());
+    for (summary, effects) in page.transactions.into_iter().zip(effects) {
+        let effect = effects
+            .effects
+            .iter()
+            .find(|effect| effect.address == address)
+            .copied()
+            .ok_or_else(|| {
+                Error::CorruptData("address transaction has no matching effect".to_string())
+            })?;
+        let position = TransactionPosition {
+            height: summary.location.height,
+            transaction_index: u32::from(summary.location.index.index()),
+        };
+        let item = address_transaction_item(
+            address,
+            summary.txid.to_string(),
+            summary.block_hash,
+            summary.block_time.to_string(),
+            TransactionRecord::from_state(summary.location, summary.record),
+            effect,
+            &effects,
+        )?;
+        matched.push((position, summary.block_hash, item));
+    }
+
+    let next_cursor = matched
+        .last()
+        .filter(|_| has_next)
+        .map(|(position, block_hash, _)| {
+            AddressTransactionCursor::new(address, *position, *block_hash).encode()
+        });
+    let prev_cursor = matched
+        .first()
+        .filter(|_| has_prev)
+        .map(|(position, block_hash, _)| {
+            AddressTransactionCursor::new(address, *position, *block_hash).encode()
+        });
+
+    Ok(AddressTransactionsResponse {
+        address: address.to_string(),
+        transactions: matched.into_iter().map(|(_, _, item)| item).collect(),
+        pagination: AddressTransactionsPagination {
+            limit,
+            has_next,
+            has_prev,
+            next_cursor,
+            prev_cursor,
+        },
+    })
+}
+
+async fn load_address_page<State>(
+    read_state: State,
+    address: Address,
+    limit: u32,
+    cursor: Option<TransactionLocation>,
+    direction: ExplorerPageDirection,
+) -> Result<zakura_state::ExplorerAddressPage, Error>
+where
+    State: ReadState,
+{
+    let response = read_state
+        .oneshot(ReadRequest::ExplorerAddressPage {
+            address,
+            limit,
+            cursor,
+            direction,
+        })
+        .await
+        .map_err(|error| Error::StateRequest(error.to_string()))?;
+    let ReadResponse::ExplorerAddressPage(page) = response else {
+        return Err(Error::StateResponse(
+            "state returned the wrong response for an explorer address request".to_string(),
+        ));
+    };
+    Ok(*page)
+}
+
+async fn load_address_effects<State>(
+    read_state: State,
+    network: &Network,
+    summaries: &[ExplorerTransactionSummary],
+) -> Result<Vec<TransactionAddressEffects>, Error>
+where
+    State: ReadState,
+{
+    let locations = summaries
+        .iter()
+        .map(|summary| summary.location)
+        .collect::<Vec<_>>();
+    let response = read_state
+        .clone()
+        .oneshot(ReadRequest::ExplorerTransactionsByLocation(
+            locations.into(),
+        ))
+        .await
+        .map_err(|error| Error::StateRequest(error.to_string()))?;
+    let ReadResponse::ExplorerTransactionsByLocation(transactions) = response else {
+        return Err(Error::StateResponse(
+            "state returned the wrong response for explorer transactions".to_string(),
+        ));
+    };
+    let transactions = transactions
+        .into_iter()
+        .map(|transaction| {
+            transaction.ok_or_else(|| {
+                Error::StateResponse(
+                    "address transaction left the canonical chain while reading".to_string(),
+                )
+            })
+        })
+        .collect::<Result<Vec<Arc<Transaction>>, Error>>()?;
+    let outpoints = transactions
+        .iter()
+        .flat_map(|transaction| transaction.inputs())
+        .filter_map(|input| input.outpoint())
+        .collect::<Vec<_>>();
+    let response = read_state
+        .oneshot(ReadRequest::ExplorerTransparentOutputs(
+            outpoints.clone().into(),
+        ))
+        .await
+        .map_err(|error| Error::StateRequest(error.to_string()))?;
+    let ReadResponse::ExplorerTransparentOutputs(outputs) = response else {
+        return Err(Error::StateResponse(
+            "state returned the wrong response for transparent outputs".to_string(),
+        ));
+    };
+    let spent_utxos = outpoints
+        .into_iter()
+        .zip(outputs)
+        .map(|(outpoint, output)| {
+            output.map(|output| (outpoint, output)).ok_or_else(|| {
+                Error::Calculation(format!("missing transparent output {outpoint:?}"))
+            })
+        })
+        .collect::<Result<HashMap<_, _>, Error>>()?;
+
+    transactions
+        .iter()
+        .map(|transaction| derive_address_effects(network, transaction, &spent_utxos))
+        .collect()
+}
+
+fn address_activity(summary: &ExplorerTransactionSummary) -> AddressActivity {
+    AddressActivity {
+        txid: summary.txid.to_string(),
+        block_height: summary.location.height.0.to_string(),
+        block_hash: summary.block_hash.to_string(),
+        block_time: summary.block_time.to_string(),
+        transaction_index: u32::from(summary.location.index.index()),
     }
 }
 

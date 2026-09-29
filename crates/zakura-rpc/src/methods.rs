@@ -83,9 +83,15 @@ use zakura_chain::{
 use zakura_consensus::{
     funding_stream_address, router::service_trait::BlockVerifierService, RouterError,
 };
+#[cfg(feature = "indexer")]
+use zakura_indexer::{
+    address_summary_from_state, address_transactions_page_from_state, block_details_from_state,
+    blocks_page_from_state, chart_data_from_state, stats_from_state, top_balances_from_state,
+    transaction_details_from_state, transactions_page_from_state,
+};
 use zakura_indexer::{
     AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, ChartDataRequest,
-    ChartDataResponse, Indexer, TopBalancesRequest, TopBalancesResponse, TransactionsResponse,
+    ChartDataResponse, TopBalancesRequest, TopBalancesResponse, TransactionsResponse,
 };
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
@@ -117,14 +123,15 @@ pub(crate) mod types;
 
 use hex_data::HexData;
 use trees::{GetSubtreesByIndexResponse, GetTreestateResponse, SubtreeRpcData};
+#[cfg(feature = "indexer")]
+use types::explorer_stats::{
+    BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, SupplyPoolStats, SupplyStats,
+};
 use types::{
     chain_tips::{self, GetChainTipsResponse},
     explorer::{GetAddressTransactionsRequest, GetBlocksRequest, GetTransactionsRequest},
     explorer_mempool::{MempoolTransactionsResponse, TransactionDetailsResponse},
-    explorer_stats::{
-        BlockchainRuntimeStats, ExplorerNetworkStatsResponse, IndexerStatusResponse, MempoolStats,
-        MiningStats, NetworkStats, SupplyPoolStats, SupplyStats,
-    },
+    explorer_stats::{ExplorerNetworkStatsResponse, IndexerStatusResponse},
     get_block_template::{
         constants::{
             DEFAULT_SOLUTION_RATE_WINDOW_SIZE, MAX_TEMPLATE_REBUILDS, MEMPOOL_LONG_POLL_INTERVAL,
@@ -1163,7 +1170,6 @@ where
     latest_chain_tip: Tip,
 
     /// Read handle for the optional in-process explorer indexer.
-    indexer: Option<Indexer>,
 
     // Tasks
     //
@@ -1314,7 +1320,6 @@ where
             state: state.clone(),
             read_state: read_state.clone(),
             latest_chain_tip: latest_chain_tip.clone(),
-            indexer: None,
             queue_sender,
             address_book,
             last_warn_error_log_rx,
@@ -1651,12 +1656,6 @@ where
     /// When unset, or set to `None`, the RPC omits `end_of_service`.
     pub fn with_end_of_support_height(mut self, end_of_support_height: Option<Height>) -> Self {
         self.end_of_support_height = end_of_support_height;
-        self
-    }
-
-    /// Adds the in-process explorer indexer used by index-backed RPC methods.
-    pub fn with_indexer(mut self, indexer: Indexer) -> Self {
-        self.indexer = Some(indexer);
         self
     }
 
@@ -3049,44 +3048,52 @@ where
     }
 
     async fn get_blocks(&self, request: Option<GetBlocksRequest>) -> Result<BlocksResponse> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        let request = request.unwrap_or_default();
-
-        match indexer
-            .blocks_page(request.limit, request.cursor, request.direction)
-            .await
+        #[cfg(not(feature = "indexer"))]
         {
-            Ok(response) => Ok(response),
-            Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
-                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+            let _ = request;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            let request = request.unwrap_or_default();
+
+            match blocks_page_from_state(
+                self.read_state.clone(),
+                &self.network,
+                request.limit,
+                request.cursor,
+                request.direction,
+            )
+            .await
+            {
+                Ok(response) => Ok(response),
+                Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
+                    Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+                }
+                Err(error) => Err(error).map_misc_error(),
             }
-            Err(error) => Err(error).map_misc_error(),
         }
     }
 
     async fn get_block_details(&self, hash_or_height: String) -> Result<BlockDetails> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        let identifier =
-            HashOrHeight::new(&hash_or_height, self.latest_chain_tip.best_tip_height())
-                .map_error(server::error::LegacyCode::InvalidParameter)?;
-
-        match indexer
-            .block_details(self.read_state.clone(), identifier)
-            .await
+        #[cfg(not(feature = "indexer"))]
         {
-            Ok(Some(details)) => Ok(details),
-            Ok(None) => Err("Block not found in the best chain")
-                .map_error(server::error::LegacyCode::InvalidAddressOrKey),
-            Err(error @ zakura_indexer::Error::BlockNotIndexed(_)) => {
-                Err(error).map_error(server::error::LegacyCode::InWarmup)
+            let _ = hash_or_height;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            let identifier =
+                HashOrHeight::new(&hash_or_height, self.latest_chain_tip.best_tip_height())
+                    .map_error(server::error::LegacyCode::InvalidParameter)?;
+
+            match block_details_from_state(self.read_state.clone(), &self.network, identifier).await
+            {
+                Ok(Some(details)) => Ok(details),
+                Ok(None) => Err("Block not found in the best chain")
+                    .map_error(server::error::LegacyCode::InvalidAddressOrKey),
+                Err(error) => Err(error).map_misc_error(),
             }
-            Err(error) => Err(error).map_misc_error(),
         }
     }
 
@@ -3094,25 +3101,34 @@ where
         &self,
         request: Option<GetTransactionsRequest>,
     ) -> Result<TransactionsResponse> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        let request = request.unwrap_or_default();
-        let query = request
-            .transaction_query()
-            .map_error(server::error::LegacyCode::InvalidParameter)?;
-
-        match indexer
-            .transactions_page(query, request.limit, request.cursor, request.direction)
-            .await
+        #[cfg(not(feature = "indexer"))]
         {
-            Ok(response) => Ok(response),
-            Err(
-                error @ (zakura_indexer::Error::InvalidCursor(_)
-                | zakura_indexer::Error::InvalidQuery(_)),
-            ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
-            Err(error) => Err(error).map_misc_error(),
+            let _ = request;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            let request = request.unwrap_or_default();
+            let query = request
+                .transaction_query()
+                .map_error(server::error::LegacyCode::InvalidParameter)?;
+
+            match transactions_page_from_state(
+                self.read_state.clone(),
+                query,
+                request.limit,
+                request.cursor,
+                request.direction,
+            )
+            .await
+            {
+                Ok(response) => Ok(response),
+                Err(
+                    error @ (zakura_indexer::Error::InvalidCursor(_)
+                    | zakura_indexer::Error::InvalidQuery(_)),
+                ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
+                Err(error) => Err(error).map_misc_error(),
+            }
         }
     }
 
@@ -3174,18 +3190,15 @@ where
             }
         }
 
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        match indexer
-            .transaction_details(self.read_state.clone(), txid)
-            .await
-        {
+        #[cfg(not(feature = "indexer"))]
+        return explorer_index_disabled();
+
+        #[cfg(feature = "indexer")]
+        match transaction_details_from_state(self.read_state.clone(), &self.network, txid).await {
             Ok(Some(details)) => Ok(TransactionDetailsResponse::Confirmed(details)),
             Ok(None) => Err("Transaction not found in the best chain")
                 .map_error(server::error::LegacyCode::InvalidAddressOrKey),
-            Err(error @ zakura_indexer::Error::TransactionNotIndexed(_)) => {
+            Err(error @ zakura_indexer::Error::ExplorerDataUnavailable(_)) => {
                 Err(error).map_error(server::error::LegacyCode::InWarmup)
             }
             Err(error) => Err(error).map_misc_error(),
@@ -3193,162 +3206,188 @@ where
     }
 
     async fn get_address_summary(&self, address: String) -> Result<AddressSummary> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        let address = explorer_transparent_address(&self.network, &address)
-            .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
+        #[cfg(not(feature = "indexer"))]
+        {
+            let _ = address;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            let address = explorer_transparent_address(&self.network, &address)
+                .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
 
-        indexer.address_summary(address).await.map_misc_error()
+            address_summary_from_state(self.read_state.clone(), &self.network, address)
+                .await
+                .map_misc_error()
+        }
     }
 
     async fn get_address_transactions(
         &self,
         request: GetAddressTransactionsRequest,
     ) -> Result<AddressTransactionsResponse> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        let address = explorer_transparent_address(&self.network, &request.address)
-            .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
-
-        match indexer
-            .address_transactions_page(address, request.limit, request.cursor, request.direction)
-            .await
+        #[cfg(not(feature = "indexer"))]
         {
-            Ok(response) => Ok(response),
-            Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
-                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+            let _ = request;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            let address = explorer_transparent_address(&self.network, &request.address)
+                .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
+
+            match address_transactions_page_from_state(
+                self.read_state.clone(),
+                &self.network,
+                address,
+                request.limit,
+                request.cursor,
+                request.direction,
+            )
+            .await
+            {
+                Ok(response) => Ok(response),
+                Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
+                    Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+                }
+                Err(error) => Err(error).map_misc_error(),
             }
-            Err(error) => Err(error).map_misc_error(),
         }
     }
 
     async fn get_indexer_status(&self) -> Result<IndexerStatusResponse> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        let indexed_tip = indexer.indexed_tip().await.map_misc_error()?;
-        let indexed_height = indexed_tip.map(|(height, _)| height.0.to_string());
-        let indexed_block_hash = indexed_tip.map(|(_, hash)| hash.to_string());
-        Ok(indexer_status(
-            self.latest_chain_tip.best_tip_height_and_hash(),
-            indexed_height.as_deref(),
-            indexed_block_hash.as_deref(),
-        ))
+        #[cfg(not(feature = "indexer"))]
+        return explorer_index_disabled();
+
+        #[cfg(feature = "indexer")]
+        {
+            let indexed_tip = self.latest_chain_tip.best_tip_height_and_hash();
+            let indexed_height = indexed_tip.map(|(height, _)| height.0.to_string());
+            let indexed_block_hash = indexed_tip.map(|(_, hash)| hash.to_string());
+            Ok(indexer_status(
+                indexed_tip,
+                indexed_height.as_deref(),
+                indexed_block_hash.as_deref(),
+            ))
+        }
     }
 
     async fn get_network_stats(&self) -> Result<ExplorerNetworkStatsResponse> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        let chain_tip = self.latest_chain_tip.best_tip_height_and_hash();
-        let indexer_stats = indexer.stats().await.map_misc_error()?;
+        #[cfg(not(feature = "indexer"))]
+        return explorer_index_disabled();
 
-        let (blockchain, network_solps, mempool, subsidy) = tokio::join!(
-            self.get_blockchain_info(),
-            self.get_network_sol_ps(None, None),
-            self.get_mempool_info(),
-            self.get_block_subsidy(None),
-        );
-        let blockchain = blockchain?;
-        let network_solps = network_solps?;
-        let mempool = mempool?;
-        let subsidy = subsidy.ok();
-        let target_block_time_seconds = chain_tip.as_ref().and_then(|(height, _)| {
-            u64::try_from(
-                NetworkUpgrade::target_spacing_for_height(&self.network, *height).num_seconds(),
-            )
-            .ok()
-        });
-        let supply = SupplyStats {
-            chain_supply_zat: blockchain
-                .chain_supply()
-                .chain_value_zat()
-                .zatoshis()
-                .to_string(),
-            pools: blockchain
-                .value_pools()
-                .iter()
-                .map(|pool| SupplyPoolStats {
-                    id: pool.id().clone(),
-                    balance_zat: pool.chain_value_zat().zatoshis().to_string(),
-                    monitored: pool.monitored(),
-                })
-                .collect(),
-        };
-        let response = ExplorerNetworkStatsResponse {
-            indexer: indexer_status(
-                chain_tip,
-                indexer_stats.indexed_height.as_deref(),
-                indexer_stats.indexed_block_hash.as_deref(),
-            ),
-            totals: indexer_stats.totals,
-            trailing_24h: indexer_stats.trailing_24h,
-            mining: MiningStats {
-                difficulty: format!("{:.6}", blockchain.difficulty()),
-                network_solps: network_solps.to_string(),
-                block_reward_zat: subsidy
-                    .as_ref()
-                    .map(|subsidy| subsidy.total_block_subsidy().zatoshis().to_string()),
-                miner_reward_zat: subsidy
-                    .as_ref()
-                    .map(|subsidy| subsidy.miner().zatoshis().to_string()),
-                founders_reward_zat: subsidy
-                    .as_ref()
-                    .map(|subsidy| subsidy.founders().zatoshis().to_string()),
-                funding_streams_zat: subsidy
-                    .as_ref()
-                    .map(|subsidy| subsidy.funding_streams_total().zatoshis().to_string()),
-                lockbox_zat: subsidy
-                    .as_ref()
-                    .map(|subsidy| subsidy.lockbox_total().zatoshis().to_string()),
-                target_block_time_seconds,
-            },
-            network: NetworkStats {
-                peer_count: self
-                    .address_book
-                    .recently_live_peers(Utc::now())
-                    .len()
+        #[cfg(feature = "indexer")]
+        {
+            let chain_tip = self.latest_chain_tip.best_tip_height_and_hash();
+            let indexer_stats = stats_from_state(self.read_state.clone())
+                .await
+                .map_misc_error()?;
+
+            let (blockchain, network_solps, mempool, subsidy) = tokio::join!(
+                self.get_blockchain_info(),
+                self.get_network_sol_ps(None, None),
+                self.get_mempool_info(),
+                self.get_block_subsidy(None),
+            );
+            let blockchain = blockchain?;
+            let network_solps = network_solps?;
+            let mempool = mempool?;
+            let subsidy = subsidy.ok();
+            let target_block_time_seconds = chain_tip.as_ref().and_then(|(height, _)| {
+                u64::try_from(
+                    NetworkUpgrade::target_spacing_for_height(&self.network, *height).num_seconds(),
+                )
+                .ok()
+            });
+            let supply = SupplyStats {
+                chain_supply_zat: blockchain
+                    .chain_supply()
+                    .chain_value_zat()
+                    .zatoshis()
                     .to_string(),
-                protocol_version: zakura_network::constants::CURRENT_NETWORK_PROTOCOL_VERSION.0,
-                node_version: self.user_agent.clone(),
-            },
-            mempool: MempoolStats {
-                transaction_count: mempool.size.to_string(),
-                bytes: mempool.bytes.to_string(),
-                memory_usage: mempool.usage.to_string(),
-            },
-            supply,
-            blockchain: BlockchainRuntimeStats {
-                state_size_bytes: blockchain.size_on_disk().to_string(),
-                verification_progress: format!("{:.6}", blockchain.verification_progress()),
-                pruned: blockchain.pruned(),
-            },
-            generated_at: Utc::now().timestamp().to_string(),
-        };
+                pools: blockchain
+                    .value_pools()
+                    .iter()
+                    .map(|pool| SupplyPoolStats {
+                        id: pool.id().clone(),
+                        balance_zat: pool.chain_value_zat().zatoshis().to_string(),
+                        monitored: pool.monitored(),
+                    })
+                    .collect(),
+            };
+            let response = ExplorerNetworkStatsResponse {
+                indexer: indexer_status(
+                    chain_tip,
+                    indexer_stats.indexed_height.as_deref(),
+                    indexer_stats.indexed_block_hash.as_deref(),
+                ),
+                totals: indexer_stats.totals,
+                trailing_24h: indexer_stats.trailing_24h,
+                mining: MiningStats {
+                    difficulty: format!("{:.6}", blockchain.difficulty()),
+                    network_solps: network_solps.to_string(),
+                    block_reward_zat: subsidy
+                        .as_ref()
+                        .map(|subsidy| subsidy.total_block_subsidy().zatoshis().to_string()),
+                    miner_reward_zat: subsidy
+                        .as_ref()
+                        .map(|subsidy| subsidy.miner().zatoshis().to_string()),
+                    founders_reward_zat: subsidy
+                        .as_ref()
+                        .map(|subsidy| subsidy.founders().zatoshis().to_string()),
+                    funding_streams_zat: subsidy
+                        .as_ref()
+                        .map(|subsidy| subsidy.funding_streams_total().zatoshis().to_string()),
+                    lockbox_zat: subsidy
+                        .as_ref()
+                        .map(|subsidy| subsidy.lockbox_total().zatoshis().to_string()),
+                    target_block_time_seconds,
+                },
+                network: NetworkStats {
+                    peer_count: self
+                        .address_book
+                        .recently_live_peers(Utc::now())
+                        .len()
+                        .to_string(),
+                    protocol_version: zakura_network::constants::CURRENT_NETWORK_PROTOCOL_VERSION.0,
+                    node_version: self.user_agent.clone(),
+                },
+                mempool: MempoolStats {
+                    transaction_count: mempool.size.to_string(),
+                    bytes: mempool.bytes.to_string(),
+                    memory_usage: mempool.usage.to_string(),
+                },
+                supply,
+                blockchain: BlockchainRuntimeStats {
+                    state_size_bytes: blockchain.size_on_disk().to_string(),
+                    verification_progress: format!("{:.6}", blockchain.verification_progress()),
+                    pruned: blockchain.pruned(),
+                },
+                generated_at: Utc::now().timestamp().to_string(),
+            };
 
-        Ok(response)
+            Ok(response)
+        }
     }
 
     async fn get_explorer_chart_data(
         &self,
         request: ChartDataRequest,
     ) -> Result<ChartDataResponse> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        match indexer.chart_data(request).await {
-            Ok(response) => Ok(response),
-            Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {
-                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+        #[cfg(not(feature = "indexer"))]
+        {
+            let _ = request;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            match chart_data_from_state(self.read_state.clone(), &self.network, request).await {
+                Ok(response) => Ok(response),
+                Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {
+                    Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+                }
+                Err(error) => Err(error).map_misc_error(),
             }
-            Err(error) => Err(error).map_misc_error(),
         }
     }
 
@@ -3356,17 +3395,21 @@ where
         &self,
         request: TopBalancesRequest,
     ) -> Result<TopBalancesResponse> {
-        let indexer = self
-            .indexer
-            .as_ref()
-            .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        match indexer.top_balances(request).await {
-            Ok(response) => Ok(response),
-            Err(error @ zakura_indexer::Error::InvalidCursor(_))
-            | Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {
-                Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+        #[cfg(not(feature = "indexer"))]
+        {
+            let _ = request;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            match top_balances_from_state(self.read_state.clone(), request).await {
+                Ok(response) => Ok(response),
+                Err(error @ zakura_indexer::Error::InvalidCursor(_))
+                | Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {
+                    Err(error).map_error(server::error::LegacyCode::InvalidParameter)
+                }
+                Err(error) => Err(error).map_misc_error(),
             }
-            Err(error) => Err(error).map_misc_error(),
         }
     }
 
@@ -4558,6 +4601,12 @@ where
         .ok_or_misc_error("No blocks in state")
 }
 
+#[cfg(not(feature = "indexer"))]
+fn explorer_index_disabled<T>() -> Result<T> {
+    Err("explorer state index is not enabled in this zakurad process").map_misc_error()
+}
+
+#[cfg(feature = "indexer")]
 fn explorer_transparent_address(
     network: &Network,
     encoded: &str,
@@ -4577,6 +4626,7 @@ fn explorer_transparent_address(
     Ok(address)
 }
 
+#[cfg(feature = "indexer")]
 fn indexer_status(
     chain_tip: Option<(Height, block::Hash)>,
     indexed_height: Option<&str>,
