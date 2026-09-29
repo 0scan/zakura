@@ -56,9 +56,22 @@ pub struct MempoolTransactionListItem {
     pub depends: Vec<String>,
 }
 
+/// Transaction-kind counts for the complete live mempool snapshot.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, JsonSchema)]
+pub struct MempoolTransactionSummary {
+    /// Number of pending transactions.
+    pub total: u64,
+    /// Number of pending transactions containing a shielded component.
+    pub shielded: u64,
+    /// Number of pending transactions containing only transparent components.
+    pub transparent: u64,
+}
+
 /// A cursor-paginated newest-first mempool snapshot.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 pub struct MempoolTransactionsResponse {
+    /// Transaction-kind counts for the unfiltered mempool snapshot.
+    pub summary: MempoolTransactionSummary,
     /// Matching pending transactions.
     pub transactions: Vec<MempoolTransactionListItem>,
     /// Best-effort pagination metadata for the volatile mempool snapshot.

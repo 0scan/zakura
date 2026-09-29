@@ -11,16 +11,16 @@ use zakura_chain::{
 };
 use zakura_indexer::{
     classify_unmined_transaction, Error, PageDirection, ShieldedFlowFilter, ShieldedPoolFilter,
-    TransactionData, TransactionKindFilter, TransactionQuery, TransactionStatus,
-    TransactionsPagination,
+    TransactionClassification, TransactionData, TransactionKind, TransactionKindFilter,
+    TransactionStatus, TransactionsPagination,
 };
 use zakura_node_services::mempool::TransactionDependencies;
 
 use super::types::{
     explorer::GetTransactionsRequest,
     explorer_mempool::{
-        MempoolTransactionListItem, MempoolTransactionMetadata, MempoolTransactionsResponse,
-        PendingTransactionDetails,
+        MempoolTransactionListItem, MempoolTransactionMetadata, MempoolTransactionSummary,
+        MempoolTransactionsResponse, PendingTransactionDetails,
     },
 };
 
@@ -68,13 +68,25 @@ pub(super) fn transactions_page(
         ));
     }
 
-    let mut matches = transactions
-        .iter()
-        .map(|transaction| positioned_list_item(transaction, dependencies, query))
-        .collect::<Result<Vec<_>, Error>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+    let mut summary = MempoolTransactionSummary::default();
+    let mut matches = Vec::new();
+    for transaction in &transactions {
+        let fee_zat = fee_zat(transaction)?;
+        let classification = classify_unmined_transaction(
+            transaction.transaction.transaction().as_ref(),
+            fee_zat,
+            transaction.spent_outputs.as_slice(),
+        )?;
+        record_summary_transaction(&mut summary, classification.kind)?;
+        if query.matches(classification) {
+            matches.push(positioned_list_item(
+                transaction,
+                dependencies,
+                fee_zat,
+                classification,
+            )?);
+        }
+    }
     matches.sort_by(|left, right| {
         right
             .position
@@ -130,6 +142,7 @@ pub(super) fn transactions_page(
     let transactions = page.iter().map(|entry| entry.item.clone()).collect();
 
     Ok(MempoolTransactionsResponse {
+        summary,
         transactions,
         pagination: TransactionsPagination {
             limit,
@@ -183,22 +196,14 @@ pub(super) fn transaction_details(
 fn positioned_list_item(
     transaction: &VerifiedUnminedTx,
     dependencies: &TransactionDependencies,
-    query: TransactionQuery,
-) -> Result<Option<PositionedTransaction>, Error> {
+    fee_zat: u64,
+    classification: TransactionClassification,
+) -> Result<PositionedTransaction, Error> {
     let raw_transaction = transaction.transaction.transaction().as_ref();
-    let fee_zat = fee_zat(transaction)?;
-    let classification = classify_unmined_transaction(
-        raw_transaction,
-        fee_zat,
-        transaction.spent_outputs.as_slice(),
-    )?;
-    if !query.matches(classification) {
-        return Ok(None);
-    }
 
     let txid = raw_transaction.hash();
     let first_seen = transaction.time.map(|time| time.timestamp());
-    Ok(Some(PositionedTransaction {
+    Ok(PositionedTransaction {
         position: MempoolPosition {
             first_seen: first_seen.unwrap_or(i64::MIN),
             txid,
@@ -257,7 +262,36 @@ fn positioned_list_item(
             )?,
             depends: direct_dependencies(txid, dependencies),
         },
-    }))
+    })
+}
+
+fn record_summary_transaction(
+    summary: &mut MempoolTransactionSummary,
+    kind: TransactionKind,
+) -> Result<(), Error> {
+    let next_total = summary
+        .total
+        .checked_add(1)
+        .ok_or_else(|| Error::Calculation("mempool transaction count exceeds u64".to_string()))?;
+    let (current_count, label) = match kind {
+        TransactionKind::Shielded => (summary.shielded, "shielded"),
+        TransactionKind::Transparent => (summary.transparent, "transparent"),
+        TransactionKind::Coinbase => {
+            return Err(Error::Calculation(
+                "coinbase transaction cannot be present in the mempool".to_string(),
+            ))
+        }
+    };
+    let next_count = current_count.checked_add(1).ok_or_else(|| {
+        Error::Calculation(format!("mempool {label} transaction count exceeds u64"))
+    })?;
+    summary.total = next_total;
+    match kind {
+        TransactionKind::Shielded => summary.shielded = next_count,
+        TransactionKind::Transparent => summary.transparent = next_count,
+        TransactionKind::Coinbase => unreachable!("coinbase returns before updating summary"),
+    }
+    Ok(())
 }
 
 fn transaction_data(
@@ -551,6 +585,7 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(response.summary, MempoolTransactionSummary::default());
         assert!(response.transactions.is_empty());
         assert_eq!(response.pagination.limit, DEFAULT_QUERY_LIMIT);
         assert!(!response.pagination.has_next);
@@ -569,5 +604,20 @@ mod tests {
         let result = transactions_page(Vec::new(), &TransactionDependencies::default(), &request);
 
         assert!(matches!(result, Err(Error::InvalidCursor(_))));
+    }
+
+    #[test]
+    fn summary_counts_pending_transaction_kinds() {
+        let mut summary = MempoolTransactionSummary::default();
+
+        record_summary_transaction(&mut summary, TransactionKind::Shielded).unwrap();
+        record_summary_transaction(&mut summary, TransactionKind::Transparent).unwrap();
+        record_summary_transaction(&mut summary, TransactionKind::Shielded).unwrap();
+
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.shielded, 2);
+        assert_eq!(summary.transparent, 1);
+        assert!(record_summary_transaction(&mut summary, TransactionKind::Coinbase).is_err());
+        assert_eq!(summary.total, 3);
     }
 }

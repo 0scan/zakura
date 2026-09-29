@@ -350,6 +350,10 @@ mod tests {
             block.zcash_serialized_size().to_string()
         );
         assert_eq!(stats.trailing_24h.block_count, "1");
+        assert_eq!(stats.trailing_24h.transaction_count, "1");
+        assert_eq!(stats.trailing_24h.transparent_transaction_count, "0");
+        assert_eq!(stats.trailing_24h.shielded_transaction_count, "0");
+        assert_eq!(stats.trailing_24h.coinbase_transaction_count, "1");
         assert!(stats.trailing_24h.complete);
     }
 
@@ -454,6 +458,10 @@ mod tests {
         assert_eq!(stats.totals.transaction_count, "0");
         assert_eq!(stats.totals.coinbase_transaction_count, "0");
         assert_eq!(stats.trailing_24h.block_count, "0");
+        assert_eq!(stats.trailing_24h.transaction_count, "0");
+        assert_eq!(stats.trailing_24h.transparent_transaction_count, "0");
+        assert_eq!(stats.trailing_24h.shielded_transaction_count, "0");
+        assert_eq!(stats.trailing_24h.coinbase_transaction_count, "0");
         assert!(stats.trailing_24h.complete);
     }
 }

@@ -39,6 +39,12 @@ pub struct RollingDayStats {
     pub block_count: String,
     /// Number of transactions in the window, including coinbase transactions.
     pub transaction_count: String,
+    /// Number of non-coinbase transactions with no shielded components.
+    pub transparent_transaction_count: String,
+    /// Number of non-coinbase transactions containing a shielded component.
+    pub shielded_transaction_count: String,
+    /// Number of coinbase transactions.
+    pub coinbase_transaction_count: String,
     /// Sum of consensus-serialized block sizes in the window.
     pub block_bytes: String,
     /// Sum of non-coinbase transaction fees in the window.

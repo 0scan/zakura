@@ -59,6 +59,9 @@ impl Indexer {
         let mut height = tip_height;
         let mut block_count = 0_u64;
         let mut transaction_count = 0_u64;
+        let mut transparent_transaction_count = 0_u64;
+        let mut shielded_transaction_count = 0_u64;
+        let mut coinbase_transaction_count = 0_u64;
         let mut block_bytes = 0_u64;
         let mut total_fees_zat = 0_u64;
         let mut oldest_timestamp = window_end;
@@ -84,6 +87,21 @@ impl Indexer {
                 transaction_count,
                 u64::from(block.transaction_count),
                 "rolling transaction count",
+            )?;
+            transparent_transaction_count = checked_add(
+                transparent_transaction_count,
+                u64::from(block.transparent_transaction_count),
+                "rolling transparent transaction count",
+            )?;
+            shielded_transaction_count = checked_add(
+                shielded_transaction_count,
+                u64::from(block.shielded_transaction_count),
+                "rolling shielded transaction count",
+            )?;
+            coinbase_transaction_count = checked_add(
+                coinbase_transaction_count,
+                u64::from(block.coinbase_transaction_count),
+                "rolling coinbase transaction count",
             )?;
             block_bytes = checked_add(
                 block_bytes,
@@ -112,6 +130,9 @@ impl Indexer {
             window_end: Some(window_end.to_string()),
             block_count: block_count.to_string(),
             transaction_count: transaction_count.to_string(),
+            transparent_transaction_count: transparent_transaction_count.to_string(),
+            shielded_transaction_count: shielded_transaction_count.to_string(),
+            coinbase_transaction_count: coinbase_transaction_count.to_string(),
             block_bytes: block_bytes.to_string(),
             total_fees_zat: total_fees_zat.to_string(),
             average_block_time_seconds: ratio(u128::from(elapsed), intervals),
@@ -142,6 +163,9 @@ fn empty_rolling_day() -> RollingDayStats {
         window_end: None,
         block_count: "0".to_string(),
         transaction_count: "0".to_string(),
+        transparent_transaction_count: "0".to_string(),
+        shielded_transaction_count: "0".to_string(),
+        coinbase_transaction_count: "0".to_string(),
         block_bytes: "0".to_string(),
         total_fees_zat: "0".to_string(),
         average_block_time_seconds: None,
