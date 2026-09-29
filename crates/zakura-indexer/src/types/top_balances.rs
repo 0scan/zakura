@@ -1,12 +1,12 @@
-//! Explorer-facing transparent rich-list contracts.
+//! Explorer-facing transparent top-balances contracts.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Cursor-paginated rich-list request.
+/// Cursor-paginated top-balances request.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
-pub struct RichListRequest {
+pub struct TopBalancesRequest {
     /// Maximum number of ranked addresses to return.
     pub limit: Option<u32>,
 
@@ -16,7 +16,7 @@ pub struct RichListRequest {
 
 /// One funded transparent address ordered by current indexed balance.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-pub struct RichListEntry {
+pub struct TopBalanceEntry {
     /// One-based position in the current ranking.
     pub rank: u64,
 
@@ -27,9 +27,9 @@ pub struct RichListEntry {
     pub balance_zat: String,
 }
 
-/// Aggregate values displayed above the rich-list table.
+/// Aggregate values displayed above the top-balances table.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-pub struct RichListSummary {
+pub struct TopBalancesSummary {
     /// Number of transparent addresses with a non-zero balance.
     pub funded_transparent_address_count: u64,
 
@@ -49,9 +49,9 @@ pub struct RichListSummary {
     pub top_100_concentration_percent: String,
 }
 
-/// Cursor metadata for a rich-list page.
+/// Cursor metadata for a top-balances page.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-pub struct RichListPagination {
+pub struct TopBalancesPagination {
     /// Maximum number of entries requested.
     pub limit: u32,
 
@@ -67,15 +67,15 @@ pub struct RichListPagination {
 
 /// A stable page from the transparent-address balance ranking.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-pub struct RichListResponse {
+pub struct TopBalancesResponse {
     /// Ranked funded transparent addresses.
-    pub entries: Vec<RichListEntry>,
+    pub entries: Vec<TopBalanceEntry>,
 
-    /// Rich-list summary derived from the same indexed chain generation.
-    pub summary: RichListSummary,
+    /// Top-balances summary derived from the same indexed chain generation.
+    pub summary: TopBalancesSummary,
 
     /// Page navigation metadata.
-    pub pagination: RichListPagination,
+    pub pagination: TopBalancesPagination,
 
     /// Indexed chain height represented by this ranking.
     pub indexed_height: Option<String>,

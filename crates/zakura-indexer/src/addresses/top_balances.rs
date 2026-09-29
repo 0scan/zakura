@@ -5,41 +5,48 @@ use zakura_chain::block::{Hash, Height};
 use crate::{
     database::DatabaseColumn,
     types::{
-        RichListEntry, RichListPagination, RichListRequest, RichListResponse, RichListSummary,
+        TopBalanceEntry, TopBalancesPagination, TopBalancesRequest, TopBalancesResponse,
+        TopBalancesSummary,
     },
     Error, Indexer,
 };
 
 use super::{
     disk_format::{address_balance_order_key, decode_address_balance_order_key},
-    rich_list_cursor::RichListCursor,
+    top_balances_cursor::TopBalancesCursor,
 };
 
-const DEFAULT_RICH_LIST_LIMIT: u32 = 100;
-const MAX_RICH_LIST_LIMIT: u32 = 100;
+const DEFAULT_TOP_BALANCES_LIMIT: u32 = 100;
+const MAX_TOP_BALANCES_LIMIT: u32 = 100;
 const SUMMARY_ADDRESS_COUNT: usize = 100;
 const MAX_STABLE_READ_ATTEMPTS: usize = 3;
 
 impl Indexer {
     /// Returns a stable cursor page ordered by descending transparent balance.
-    pub async fn rich_list(&self, request: RichListRequest) -> Result<RichListResponse, Error> {
+    pub async fn top_balances(
+        &self,
+        request: TopBalancesRequest,
+    ) -> Result<TopBalancesResponse, Error> {
         let indexer = self.clone();
-        tokio::task::spawn_blocking(move || indexer.rich_list_blocking(request))
+        tokio::task::spawn_blocking(move || indexer.top_balances_blocking(request))
             .await
             .map_err(|error| Error::Task(error.to_string()))?
     }
 
-    fn rich_list_blocking(&self, request: RichListRequest) -> Result<RichListResponse, Error> {
-        let limit = request.limit.unwrap_or(DEFAULT_RICH_LIST_LIMIT);
-        if !(1..=MAX_RICH_LIST_LIMIT).contains(&limit) {
+    fn top_balances_blocking(
+        &self,
+        request: TopBalancesRequest,
+    ) -> Result<TopBalancesResponse, Error> {
+        let limit = request.limit.unwrap_or(DEFAULT_TOP_BALANCES_LIMIT);
+        if !(1..=MAX_TOP_BALANCES_LIMIT).contains(&limit) {
             return Err(Error::InvalidQuery(format!(
-                "rich-list limit must be between 1 and {MAX_RICH_LIST_LIMIT}"
+                "top-balances limit must be between 1 and {MAX_TOP_BALANCES_LIMIT}"
             )));
         }
         let cursor = request
             .cursor
             .as_deref()
-            .map(RichListCursor::decode)
+            .map(TopBalancesCursor::decode)
             .transpose()?;
 
         for _ in 0..MAX_STABLE_READ_ATTEMPTS {
@@ -47,33 +54,33 @@ impl Indexer {
             if let Some(cursor) = cursor {
                 let Some((_, indexed_hash)) = indexed_tip else {
                     return Err(Error::InvalidCursor(
-                        "rich-list cursor belongs to a non-empty index".to_string(),
+                        "top-balances cursor belongs to a non-empty index".to_string(),
                     ));
                 };
                 if cursor.indexed_block_hash != indexed_hash {
                     return Err(Error::InvalidCursor(
-                        "rich-list ranking changed; restart from the first page".to_string(),
+                        "top-balances ranking changed; restart from the first page".to_string(),
                     ));
                 }
             }
 
-            let response = self.rich_list_at_tip(limit, cursor, indexed_tip)?;
+            let response = self.top_balances_at_tip(limit, cursor, indexed_tip)?;
             if self.indexed_block_tip()? == indexed_tip {
                 return Ok(response);
             }
         }
 
         Err(Error::Task(
-            "indexed chain changed repeatedly during rich-list query".to_string(),
+            "indexed chain changed repeatedly during top-balances query".to_string(),
         ))
     }
 
-    fn rich_list_at_tip(
+    fn top_balances_at_tip(
         &self,
         limit: u32,
-        cursor: Option<RichListCursor>,
+        cursor: Option<TopBalancesCursor>,
         indexed_tip: Option<(Height, Hash)>,
-    ) -> Result<RichListResponse, Error> {
+    ) -> Result<TopBalancesResponse, Error> {
         let cursor_key =
             cursor.map(|cursor| address_balance_order_key(cursor.address, cursor.balance_zat));
         if let Some(cursor_key) = cursor_key.as_ref() {
@@ -83,16 +90,16 @@ impl Indexer {
                 .is_none()
             {
                 return Err(Error::InvalidCursor(
-                    "rich-list cursor entry is no longer funded".to_string(),
+                    "top-balances cursor entry is no longer funded".to_string(),
                 ));
             }
         }
 
         let limit_usize = usize::try_from(limit)
-            .map_err(|_| Error::Calculation("rich-list limit exceeds usize".to_string()))?;
+            .map_err(|_| Error::Calculation("top-balances limit exceeds usize".to_string()))?;
         let scan_limit = limit_usize
             .checked_add(2)
-            .ok_or_else(|| Error::Calculation("rich-list scan limit overflow".to_string()))?;
+            .ok_or_else(|| Error::Calculation("top-balances scan limit overflow".to_string()))?;
         let mut rows = self.database.scan_forward_from(
             DatabaseColumn::AddressBalanceOrder,
             cursor_key.as_deref().unwrap_or_default(),
@@ -101,7 +108,7 @@ impl Indexer {
         if let Some(cursor_key) = cursor_key.as_ref() {
             if rows.first().map(|(key, _)| key) != Some(cursor_key) {
                 return Err(Error::InvalidCursor(
-                    "rich-list cursor entry is missing from its ranking position".to_string(),
+                    "top-balances cursor entry is missing from its ranking position".to_string(),
                 ));
             }
             rows.remove(0);
@@ -110,10 +117,9 @@ impl Indexer {
         let has_next = rows.len() > limit_usize;
         rows.truncate(limit_usize);
         let first_rank = cursor.map_or(Ok(1), |cursor| {
-            cursor
-                .rank
-                .checked_add(1)
-                .ok_or_else(|| Error::InvalidCursor("rich-list cursor rank overflow".to_string()))
+            cursor.rank.checked_add(1).ok_or_else(|| {
+                Error::InvalidCursor("top-balances cursor rank overflow".to_string())
+            })
         })?;
         let entries = rows
             .iter()
@@ -121,12 +127,12 @@ impl Indexer {
             .map(|(index, (key, _))| {
                 let (address, balance_zat) = decode_address_balance_order_key(key)?;
                 let offset = u64::try_from(index).map_err(|_| {
-                    Error::Calculation("rich-list page offset exceeds u64".to_string())
+                    Error::Calculation("top-balances page offset exceeds u64".to_string())
                 })?;
-                let rank = first_rank
-                    .checked_add(offset)
-                    .ok_or_else(|| Error::Calculation("rich-list rank exceeds u64".to_string()))?;
-                Ok(RichListEntry {
+                let rank = first_rank.checked_add(offset).ok_or_else(|| {
+                    Error::Calculation("top-balances rank exceeds u64".to_string())
+                })?;
+                Ok(TopBalanceEntry {
                     rank,
                     address: address.to_string(),
                     balance_zat: balance_zat.to_string(),
@@ -140,7 +146,7 @@ impl Indexer {
                 self.indexed_block_record(hash)?
                     .ok_or_else(|| {
                         Error::CorruptData(
-                            "indexed tip is missing its rich-list supply record".to_string(),
+                            "indexed tip is missing its top-balances supply record".to_string(),
                         )
                     })?
                     .pool_transparent
@@ -168,25 +174,25 @@ impl Indexer {
 
         let next_cursor = if has_next {
             let last = entries.last().ok_or_else(|| {
-                Error::CorruptData("non-empty rich-list page has no last entry".to_string())
+                Error::CorruptData("non-empty top-balances page has no last entry".to_string())
             })?;
             let (address, balance_zat) = decode_address_balance_order_key(
                 &rows
                     .last()
-                    .expect("rich-list rows exist because the returned page is non-empty")
+                    .expect("top-balances rows exist because the returned page is non-empty")
                     .0,
             )?;
             let indexed_hash = indexed_tip
                 .map(|(_, hash)| hash)
                 .ok_or_else(|| Error::CorruptData("funded index has no chain tip".to_string()))?;
-            Some(RichListCursor::new(address, balance_zat, last.rank, indexed_hash).encode())
+            Some(TopBalancesCursor::new(address, balance_zat, last.rank, indexed_hash).encode())
         } else {
             None
         };
 
-        Ok(RichListResponse {
+        Ok(TopBalancesResponse {
             entries,
-            summary: RichListSummary {
+            summary: TopBalancesSummary {
                 funded_transparent_address_count: chain_stats.funded_transparent_address_count,
                 transparent_supply_zat: transparent_supply.to_string(),
                 top_10_balance_zat: top_10_balance.to_string(),
@@ -200,7 +206,7 @@ impl Indexer {
                     transparent_supply,
                 ),
             },
-            pagination: RichListPagination {
+            pagination: TopBalancesPagination {
                 limit,
                 total: chain_stats.funded_transparent_address_count.to_string(),
                 has_next,

@@ -3,8 +3,8 @@
 mod cursor;
 mod disk_format;
 mod query;
-mod rich_list;
-mod rich_list_cursor;
+mod top_balances;
+mod top_balances_cursor;
 mod write;
 
 pub(crate) use write::PendingAddressRecords;

@@ -1,4 +1,4 @@
-//! Opaque rich-list cursor bound to one indexed chain generation.
+//! Opaque top-balances cursor bound to one indexed chain generation.
 
 use std::str::FromStr;
 
@@ -11,14 +11,14 @@ const BALANCE_RANK_AND_HASH_BYTES: usize = 48;
 const MAX_ENCODED_CURSOR_LENGTH: usize = 160;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct RichListCursor {
+pub(super) struct TopBalancesCursor {
     pub(super) address: Address,
     pub(super) balance_zat: u64,
     pub(super) rank: u64,
     pub(super) indexed_block_hash: Hash,
 }
 
-impl RichListCursor {
+impl TopBalancesCursor {
     pub(super) fn new(
         address: Address,
         balance_zat: u64,
@@ -49,7 +49,7 @@ impl RichListCursor {
     pub(super) fn decode(encoded: &str) -> Result<Self, Error> {
         if encoded.len() > MAX_ENCODED_CURSOR_LENGTH {
             return Err(Error::InvalidCursor(
-                "rich-list cursor is too long".to_string(),
+                "top-balances cursor is too long".to_string(),
             ));
         }
         let bytes = URL_SAFE_NO_PAD
@@ -59,14 +59,16 @@ impl RichListCursor {
             .first()
             .copied()
             .map(usize::from)
-            .ok_or_else(|| Error::InvalidCursor("rich-list cursor is empty".to_string()))?;
+            .ok_or_else(|| Error::InvalidCursor("top-balances cursor is empty".to_string()))?;
         let expected_length = 1_usize
             .checked_add(address_length)
             .and_then(|length| length.checked_add(BALANCE_RANK_AND_HASH_BYTES))
-            .ok_or_else(|| Error::InvalidCursor("rich-list cursor length overflow".to_string()))?;
+            .ok_or_else(|| {
+                Error::InvalidCursor("top-balances cursor length overflow".to_string())
+            })?;
         if bytes.len() != expected_length {
             return Err(Error::InvalidCursor(
-                "rich-list cursor has an invalid length".to_string(),
+                "top-balances cursor has an invalid length".to_string(),
             ));
         }
 
@@ -89,7 +91,7 @@ impl RichListCursor {
         );
         if rank == 0 {
             return Err(Error::InvalidCursor(
-                "rich-list cursor rank must be positive".to_string(),
+                "top-balances cursor rank must be positive".to_string(),
             ));
         }
         let indexed_block_hash =
@@ -110,17 +112,17 @@ impl RichListCursor {
 mod tests {
     use zakura_chain::{block::Hash, parameters::NetworkKind, transparent::Address};
 
-    use super::RichListCursor;
+    use super::TopBalancesCursor;
 
     #[test]
     fn cursor_round_trips_ranking_position_and_generation() {
-        let cursor = RichListCursor::new(
+        let cursor = TopBalancesCursor::new(
             Address::from_pub_key_hash(NetworkKind::Mainnet, [7; 20]),
             42,
             3,
             Hash([9; 32]),
         );
 
-        assert_eq!(RichListCursor::decode(&cursor.encode()).unwrap(), cursor);
+        assert_eq!(TopBalancesCursor::decode(&cursor.encode()).unwrap(), cursor);
     }
 }

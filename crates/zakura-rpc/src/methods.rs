@@ -85,7 +85,7 @@ use zakura_consensus::{
 };
 use zakura_indexer::{
     AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, ChartDataRequest,
-    ChartDataResponse, Indexer, RichListRequest, RichListResponse, TransactionsResponse,
+    ChartDataResponse, Indexer, TopBalancesRequest, TopBalancesResponse, TransactionsResponse,
 };
 use zakura_network::{address_book_peers::AddressBookPeers, types::PeerServices, PeerSocketAddr};
 use zakura_node_services::mempool::{self, CreatedOrSpent, MempoolService};
@@ -240,7 +240,7 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("getindexerstatus", RpcAccess::Unauthenticated),
     ("getnetworkstats", RpcAccess::Unauthenticated),
     ("getexplorerchartdata", RpcAccess::Unauthenticated),
-    ("getexplorerrichlist", RpcAccess::Unauthenticated),
+    ("getexplorertopbalances", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -824,9 +824,12 @@ pub trait Rpc {
     ///
     /// # Parameters
     ///
-    /// - `request`: (object, required) Rich-list cursor and page limit.
-    #[method(name = "getexplorerrichlist")]
-    async fn get_explorer_rich_list(&self, request: RichListRequest) -> Result<RichListResponse>;
+    /// - `request`: (object, required) Top-balances cursor and page limit.
+    #[method(name = "getexplorertopbalances")]
+    async fn get_explorer_top_balances(
+        &self,
+        request: TopBalancesRequest,
+    ) -> Result<TopBalancesResponse>;
 
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
@@ -3329,12 +3332,15 @@ where
         }
     }
 
-    async fn get_explorer_rich_list(&self, request: RichListRequest) -> Result<RichListResponse> {
+    async fn get_explorer_top_balances(
+        &self,
+        request: TopBalancesRequest,
+    ) -> Result<TopBalancesResponse> {
         let indexer = self
             .indexer
             .as_ref()
             .ok_or_misc_error("explorer indexer is not enabled in this zakurad process")?;
-        match indexer.rich_list(request).await {
+        match indexer.top_balances(request).await {
             Ok(response) => Ok(response),
             Err(error @ zakura_indexer::Error::InvalidCursor(_))
             | Err(error @ zakura_indexer::Error::InvalidQuery(_)) => {

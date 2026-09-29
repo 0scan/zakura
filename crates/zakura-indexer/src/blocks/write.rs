@@ -593,7 +593,7 @@ mod tests {
 
     use crate::{
         transactions::TransactionQuery,
-        types::{ChartDataRequest, PageDirection, RichListRequest, TransactionKind},
+        types::{ChartDataRequest, PageDirection, TopBalancesRequest, TransactionKind},
         Indexer,
     };
 
@@ -755,28 +755,28 @@ mod tests {
         assert!(summary.last_seen.is_some());
         assert!(summary.first_funding.as_ref().unwrap().is_coinbase);
 
-        let rich_list = indexer
-            .rich_list(RichListRequest {
+        let top_balances = indexer
+            .top_balances(TopBalancesRequest {
                 limit: Some(1),
                 cursor: None,
             })
             .await
             .expect("funded address should be ranked");
-        assert_eq!(rich_list.entries.len(), 1);
-        assert_eq!(rich_list.entries[0].rank, 1);
-        assert_eq!(rich_list.entries[0].address, richer_address.to_string());
-        assert_eq!(rich_list.entries[0].balance_zat, "234567");
-        assert_eq!(rich_list.summary.funded_transparent_address_count, 2);
-        assert_eq!(rich_list.summary.top_10_balance_zat, "358023");
-        assert_eq!(rich_list.pagination.total, "2");
-        assert!(rich_list.pagination.has_next);
+        assert_eq!(top_balances.entries.len(), 1);
+        assert_eq!(top_balances.entries[0].rank, 1);
+        assert_eq!(top_balances.entries[0].address, richer_address.to_string());
+        assert_eq!(top_balances.entries[0].balance_zat, "234567");
+        assert_eq!(top_balances.summary.funded_transparent_address_count, 2);
+        assert_eq!(top_balances.summary.top_10_balance_zat, "358023");
+        assert_eq!(top_balances.pagination.total, "2");
+        assert!(top_balances.pagination.has_next);
         let second_page = indexer
-            .rich_list(RichListRequest {
+            .top_balances(TopBalancesRequest {
                 limit: Some(1),
-                cursor: rich_list.pagination.next_cursor,
+                cursor: top_balances.pagination.next_cursor,
             })
             .await
-            .expect("rich-list cursor should return the next address");
+            .expect("top-balances cursor should return the next address");
         assert_eq!(second_page.entries.len(), 1);
         assert_eq!(second_page.entries[0].rank, 2);
         assert_eq!(second_page.entries[0].address, address.to_string());
@@ -809,12 +809,12 @@ mod tests {
             .await
             .unwrap();
         assert!(page.transactions.is_empty());
-        let rich_list = indexer
-            .rich_list(RichListRequest::default())
+        let top_balances = indexer
+            .top_balances(TopBalancesRequest::default())
             .await
-            .expect("rolled-back rich list should be queryable");
-        assert!(rich_list.entries.is_empty());
-        assert_eq!(rich_list.summary.funded_transparent_address_count, 0);
+            .expect("rolled-back top balances should be queryable");
+        assert!(top_balances.entries.is_empty());
+        assert_eq!(top_balances.summary.funded_transparent_address_count, 0);
     }
 
     #[tokio::test]

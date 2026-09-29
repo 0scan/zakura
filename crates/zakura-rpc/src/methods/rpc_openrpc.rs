@@ -229,12 +229,12 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     result: |g| g.result::<openrpsee::openrpc::ResultType>("getexplorerchartdata_result"),
     deprecated: false,
 },
-"getexplorerrichlist" => openrpsee::openrpc::RpcMethod {
-    description: "Returns the cursor-paginated transparent-address balance ranking.\n\nmethod: post\ntags: explorer\n\n# Parameters\n\n- `request`: (object, required) Rich-list cursor and page limit.\n",
+"getexplorertopbalances" => openrpsee::openrpc::RpcMethod {
+    description: "Returns the cursor-paginated transparent-address balance ranking.\n\nmethod: post\ntags: explorer\n\n# Parameters\n\n- `request`: (object, required) Top-balances cursor and page limit.\n",
     params: |_g| vec![
-        _g.param::<RichListRequest>("request", crate::methods::PARAM_REQUEST_DESC, true),
+        _g.param::<TopBalancesRequest>("request", crate::methods::PARAM_REQUEST_DESC, true),
     ],
-    result: |g| g.result::<openrpsee::openrpc::ResultType>("getexplorerrichlist_result"),
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getexplorertopbalances_result"),
     deprecated: false,
 },
 "getblockhash" => openrpsee::openrpc::RpcMethod {
