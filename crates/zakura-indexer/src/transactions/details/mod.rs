@@ -162,17 +162,20 @@ mod tests {
         assert_eq!(details.transaction.transaction.txid, txid.to_string());
         assert_eq!(details.transaction.block_hash, block_hash.to_string());
         assert_eq!(details.transaction.transaction_index, 0);
-        assert_eq!(details.status, TransactionStatus::Confirmed);
+        assert_eq!(details.status, TransactionStatus::Finalized);
         assert_eq!(details.kind, TransactionKind::Coinbase);
         assert_eq!(details.confirmations, 1);
-        assert!(details.canonical);
-        assert!(details.finalized);
         assert!(details.coinbase_hex.is_some());
 
         let json = serde_json::to_value(details).expect("transaction details serialize as JSON");
         assert_eq!(json["txid"], txid.to_string());
+        assert_eq!(json["status"], "finalized");
         assert_eq!(json["tx_index"], 0);
         assert!(json.get("transaction_index").is_none());
+        assert!(json.get("flow_amount_zat").is_some());
+        assert!(json.get("amount_zat").is_none());
+        assert!(json.get("canonical").is_none());
+        assert!(json.get("finalized").is_none());
         assert!(json.get("finality_status").is_none());
     }
 }

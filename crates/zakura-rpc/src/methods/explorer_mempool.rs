@@ -181,12 +181,12 @@ pub(super) fn transaction_details(
         block_time: None,
         transaction_index: None,
         confirmations: 0,
-        canonical: false,
-        finalized: false,
         kind: classification.kind,
         pool: classification.pool,
         flow: classification.flow,
-        amount_zat: classification.amount_zat.map(|amount| amount.to_string()),
+        flow_amount_zat: classification
+            .flow_amount_zat
+            .map(|amount| amount.to_string()),
         joinsplit_count: count_u32(raw_transaction.joinsplit_count(), "Sprout JoinSplit count")?,
         coinbase_hex: None,
         mempool: mempool_metadata(transaction, dependencies),
@@ -220,7 +220,9 @@ fn positioned_list_item(
             kind: classification.kind,
             pool: classification.pool,
             flow: classification.flow,
-            amount_zat: classification.amount_zat.map(|amount| amount.to_string()),
+            flow_amount_zat: classification
+                .flow_amount_zat
+                .map(|amount| amount.to_string()),
             fee: fee_zat.to_string(),
             vin_count: count_u32(raw_transaction.inputs().len(), "transparent input count")?,
             vout_count: count_u32(raw_transaction.outputs().len(), "transparent output count")?,

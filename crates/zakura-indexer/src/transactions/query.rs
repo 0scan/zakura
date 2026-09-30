@@ -186,7 +186,7 @@ fn transaction_list_item(
     block_time: String,
     record: TransactionRecord,
 ) -> Result<TransactionListItem, Error> {
-    let amount_zat = public_flow_amount(&record)?;
+    let flow_amount_zat = public_flow_amount(&record)?;
     Ok(TransactionListItem {
         txid: txid.to_string(),
         block_height: record.position.height.0.to_string(),
@@ -197,7 +197,7 @@ fn transaction_list_item(
         kind: transaction_kind(&record),
         pool: shielded_pool(&record),
         flow: shielded_flow(&record)?,
-        amount_zat: amount_zat.map(|amount| amount.to_string()),
+        flow_amount_zat: flow_amount_zat.map(|amount| amount.to_string()),
         fee: record.fee_zat.to_string(),
         vin_count: record.transparent_input_count,
         vout_count: record.transparent_output_count,

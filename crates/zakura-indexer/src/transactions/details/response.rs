@@ -36,6 +36,16 @@ pub(super) struct TransactionChainStatus {
     pub(super) finalized: bool,
 }
 
+impl TransactionChainStatus {
+    fn response_status(self) -> TransactionStatus {
+        if self.finalized {
+            TransactionStatus::Finalized
+        } else {
+            TransactionStatus::Confirmed
+        }
+    }
+}
+
 pub(crate) fn build_block_transactions(
     network: &Network,
     block: &Block,
@@ -86,7 +96,7 @@ pub(super) fn build_transaction_details(
     )?;
     validate_indexed_record(transaction, record, &response)?;
 
-    let amount_zat = public_flow_amount(&record)?;
+    let flow_amount_zat = public_flow_amount(&record)?;
     let coinbase_script = transaction
         .inputs()
         .first()
@@ -94,14 +104,12 @@ pub(super) fn build_transaction_details(
 
     Ok(TransactionDetails {
         transaction: response,
-        status: TransactionStatus::Confirmed,
+        status: status.response_status(),
         confirmations: status.confirmations,
-        canonical: true,
-        finalized: status.finalized,
         kind: transaction_kind(&record),
         pool: shielded_pool(&record),
         flow: shielded_flow(&record)?,
-        amount_zat: amount_zat.map(|amount| amount.to_string()),
+        flow_amount_zat: flow_amount_zat.map(|amount| amount.to_string()),
         joinsplit_count: record.joinsplit_count,
         coinbase_hex: coinbase_script.as_deref().map(hex::encode),
     })
@@ -342,4 +350,24 @@ fn validate_indexed_record(
 
 fn count_u32(value: usize, name: &str) -> Result<u32, Error> {
     u32::try_from(value).map_err(|_| Error::Calculation(format!("{name} exceeds u32")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transaction_status_includes_finality() {
+        let confirmed = TransactionChainStatus {
+            confirmations: 1,
+            finalized: false,
+        };
+        let finalized = TransactionChainStatus {
+            confirmations: 100,
+            finalized: true,
+        };
+
+        assert_eq!(confirmed.response_status(), TransactionStatus::Confirmed);
+        assert_eq!(finalized.response_status(), TransactionStatus::Finalized);
+    }
 }

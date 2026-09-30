@@ -3195,7 +3195,7 @@ where
 
         #[cfg(feature = "indexer")]
         match transaction_details_from_state(self.read_state.clone(), &self.network, txid).await {
-            Ok(Some(details)) => Ok(TransactionDetailsResponse::Confirmed(details)),
+            Ok(Some(details)) => Ok(TransactionDetailsResponse::Mined(details)),
             Ok(None) => Err("Transaction not found in the best chain")
                 .map_error(server::error::LegacyCode::InvalidAddressOrKey),
             Err(error @ zakura_indexer::Error::ExplorerDataUnavailable(_)) => {

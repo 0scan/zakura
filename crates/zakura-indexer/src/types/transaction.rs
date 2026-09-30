@@ -3,12 +3,14 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Whether an explorer transaction is mined or currently awaiting inclusion.
+/// Current inclusion and finality state of an explorer transaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionStatus {
-    /// The transaction belongs to the current canonical chain.
+    /// The transaction is in the canonical chain but can still be reorganized.
     Confirmed,
+    /// The transaction is in the durable finalized chain.
+    Finalized,
     /// The transaction currently belongs to the node's mempool.
     Pending,
 }
@@ -64,8 +66,8 @@ pub struct TransactionClassification {
     pub pool: Option<ShieldedPool>,
     /// Observable transparent/shielded boundary flow, when applicable.
     pub flow: Option<ShieldedFlow>,
-    /// Public boundary-flow amount in zatoshis, when observable.
-    pub amount_zat: Option<u64>,
+    /// Observable transparent/shielded boundary-flow amount in zatoshis.
+    pub flow_amount_zat: Option<u64>,
     /// Combined shielded value balance in zatoshis.
     pub shielded_value_balance_zat: i64,
 }
@@ -101,8 +103,8 @@ pub struct TransactionListItem {
     /// Observable transparent/shielded boundary flow, when applicable.
     pub flow: Option<ShieldedFlow>,
 
-    /// Public boundary-flow amount in zatoshis, or `None` when the amount is private.
-    pub amount_zat: Option<String>,
+    /// Observable transparent/shielded boundary-flow amount in zatoshis.
+    pub flow_amount_zat: Option<String>,
 
     /// Exact transaction fee in zatoshis.
     pub fee: String,

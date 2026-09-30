@@ -26,8 +26,8 @@ pub struct MempoolTransactionListItem {
     pub pool: Option<ShieldedPool>,
     /// Observable transparent/shielded boundary flow, when applicable.
     pub flow: Option<ShieldedFlow>,
-    /// Public boundary-flow amount in zatoshis, when observable.
-    pub amount_zat: Option<String>,
+    /// Observable transparent/shielded boundary-flow amount in zatoshis.
+    pub flow_amount_zat: Option<String>,
     /// Exact transaction fee in zatoshis.
     pub fee: String,
     /// Number of transparent inputs.
@@ -108,18 +108,14 @@ pub struct PendingTransactionDetails {
     pub transaction_index: Option<u32>,
     /// Pending transactions have zero confirmations.
     pub confirmations: u32,
-    /// Pending transactions do not yet belong to the canonical chain.
-    pub canonical: bool,
-    /// Pending transactions are not finalized.
-    pub finalized: bool,
     /// Primary transaction kind.
     pub kind: TransactionKind,
     /// Shielded pool classification, when applicable.
     pub pool: Option<ShieldedPool>,
     /// Observable transparent/shielded boundary flow, when applicable.
     pub flow: Option<ShieldedFlow>,
-    /// Public boundary-flow amount in zatoshis, when observable.
-    pub amount_zat: Option<String>,
+    /// Observable transparent/shielded boundary-flow amount in zatoshis.
+    pub flow_amount_zat: Option<String>,
     /// Number of Sprout JoinSplits.
     pub joinsplit_count: u32,
     /// Coinbase data is always absent because coinbase transactions cannot enter the mempool.
@@ -132,8 +128,8 @@ pub struct PendingTransactionDetails {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum TransactionDetailsResponse {
-    /// A transaction in the canonical chain.
-    Confirmed(TransactionDetails),
+    /// A transaction mined in the canonical chain.
+    Mined(TransactionDetails),
     /// A transaction in the node's mempool.
     Pending(PendingTransactionDetails),
 }

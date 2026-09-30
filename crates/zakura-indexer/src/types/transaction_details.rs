@@ -18,12 +18,6 @@ pub struct TransactionDetails {
     /// Number of confirmations in the current best chain.
     pub confirmations: u32,
 
-    /// Whether the transaction belongs to the current best chain.
-    pub canonical: bool,
-
-    /// Whether the containing block is at or below the durable finalized tip.
-    pub finalized: bool,
-
     /// Primary transaction kind.
     pub kind: TransactionKind,
 
@@ -33,8 +27,8 @@ pub struct TransactionDetails {
     /// Observable transparent/shielded boundary flow, when applicable.
     pub flow: Option<ShieldedFlow>,
 
-    /// Public boundary-flow amount in zatoshis, or `None` when the amount is private.
-    pub amount_zat: Option<String>,
+    /// Observable transparent/shielded boundary-flow amount in zatoshis.
+    pub flow_amount_zat: Option<String>,
 
     /// Number of Sprout JoinSplits.
     pub joinsplit_count: u32,

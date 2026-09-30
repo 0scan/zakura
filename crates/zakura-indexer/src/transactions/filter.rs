@@ -196,7 +196,7 @@ impl TransactionQuery {
         };
         let amount_matches = self.amount.minimum_zat().is_none_or(|minimum| {
             classification
-                .amount_zat
+                .flow_amount_zat
                 .is_some_and(|amount| amount >= minimum)
         });
 
