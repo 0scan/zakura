@@ -17,11 +17,8 @@ use zakura_indexer::{
 use zakura_node_services::mempool::TransactionDependencies;
 
 use super::types::{
-    explorer::GetTransactionsRequest,
-    explorer_mempool::{
-        MempoolTransactionListItem, MempoolTransactionMetadata, MempoolTransactionSummary,
-        MempoolTransactionsResponse, PendingTransactionDetails,
-    },
+    GetTransactionsRequest, MempoolTransactionListItem, MempoolTransactionMetadata,
+    MempoolTransactionSummary, MempoolTransactionsResponse, PendingTransactionDetails,
 };
 
 const DEFAULT_QUERY_LIMIT: u32 = 25;
