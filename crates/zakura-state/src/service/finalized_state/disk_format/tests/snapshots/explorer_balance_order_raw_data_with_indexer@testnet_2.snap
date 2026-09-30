@@ -1,0 +1,10 @@
+---
+source: crates/zakura-state/src/service/finalized_state/disk_format/tests/snapshot.rs
+expression: cf_data
+---
+[
+  KV(
+    k: "ffffffffffff6d8303ef775f1f997f122a062fff1a2d7443abd1f9c642",
+    v: "",
+  ),
+]

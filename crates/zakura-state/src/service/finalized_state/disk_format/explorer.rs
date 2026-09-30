@@ -508,7 +508,7 @@ fn amount_bucket_from_tag(tag: u8) -> ExplorerAmountBucket {
 
 #[cfg(test)]
 mod tests {
-    use zakura_chain::block::Height;
+    use zakura_chain::{block::Height, parameters::NetworkKind};
 
     use super::*;
 
@@ -570,5 +570,40 @@ mod tests {
             ExplorerShieldedClassLocation::from_bytes(class.as_bytes()),
             class
         );
+    }
+
+    #[test]
+    fn balance_keys_sort_richest_first_and_round_trip() {
+        let lower_address = Address::from_pub_key_hash(NetworkKind::Mainnet, [1; 20]);
+        let higher_address = Address::from_pub_key_hash(NetworkKind::Mainnet, [2; 20]);
+        let richest = ExplorerBalanceKey::new(higher_address, 20);
+        let poorer = ExplorerBalanceKey::new(lower_address, 10);
+
+        assert!(richest.as_bytes() < poorer.as_bytes());
+        assert_eq!(ExplorerBalanceKey::from_bytes(richest.as_bytes()), richest);
+        assert_eq!(richest.address(), higher_address);
+        assert_eq!(richest.balance_zat(), 20);
+    }
+
+    #[test]
+    fn day_keys_preserve_chronological_order_and_round_trip() {
+        let earlier = ExplorerDayKey(1);
+        let later = ExplorerDayKey(256);
+
+        assert!(earlier.as_bytes() < later.as_bytes());
+        assert_eq!(ExplorerDayKey::from_bytes(later.as_bytes()), later);
+    }
+
+    #[test]
+    fn analytics_values_round_trip_stable_encoding() {
+        let mut chain = ExplorerChainStats::default();
+        chain.block_count = 42;
+        chain.total_fees_zat = 1_000;
+        let mut daily = ExplorerDailyStats::default();
+        daily.day = 20_000;
+        daily.end_height = 2_000_000;
+
+        assert_eq!(ExplorerChainStats::from_bytes(chain.as_bytes()), chain);
+        assert_eq!(ExplorerDailyStats::from_bytes(daily.as_bytes()), daily);
     }
 }

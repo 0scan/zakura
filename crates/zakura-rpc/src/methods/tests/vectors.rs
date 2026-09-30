@@ -53,6 +53,7 @@ use config::mining;
 use types::long_poll::LONG_POLL_ID_LENGTH;
 
 #[test]
+#[cfg(feature = "indexer")]
 fn explorer_indexer_status_compares_height_and_hash() {
     let hash = Hash([0x51; 32]);
     let encoded_hash = hash.to_string();

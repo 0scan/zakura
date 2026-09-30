@@ -3261,13 +3261,14 @@ where
 
         #[cfg(feature = "indexer")]
         {
-            let indexed_tip = self.latest_chain_tip.best_tip_height_and_hash();
-            let indexed_height = indexed_tip.map(|(height, _)| height.0.to_string());
-            let indexed_block_hash = indexed_tip.map(|(_, hash)| hash.to_string());
+            let chain_tip = self.latest_chain_tip.best_tip_height_and_hash();
+            let indexer_stats = stats_from_state(self.read_state.clone())
+                .await
+                .map_misc_error()?;
             Ok(indexer_status(
-                indexed_tip,
-                indexed_height.as_deref(),
-                indexed_block_hash.as_deref(),
+                chain_tip,
+                indexer_stats.indexed_height.as_deref(),
+                indexer_stats.indexed_block_hash.as_deref(),
             ))
         }
     }

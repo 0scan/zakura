@@ -171,6 +171,11 @@ fn intra_block_self_spend_chain_in_finalized_state() {
 
     let zakura_db = new_ephemeral_zakura_db(&network);
     let mut batch = DiskWriteBatch::new();
+    #[cfg(feature = "indexer")]
+    let spent_output_locations = HashMap::from([
+        (existing_outpoint, existing_output_location),
+        (t0_output_outpoint, t0_output_location),
+    ]);
 
     // On the buggy revision this call panics with "balance overflow already checked" during
     // the credit-first batch (intermediate balance reaches 1.5 * MAX_MONEY). On the fixed
@@ -183,7 +188,7 @@ fn intra_block_self_spend_chain_in_finalized_state() {
         &spent_utxos_by_outpoint,
         &spent_utxos_by_out_loc,
         #[cfg(feature = "indexer")]
-        &HashMap::new(),
+        &spent_output_locations,
         address_balances,
     );
 
