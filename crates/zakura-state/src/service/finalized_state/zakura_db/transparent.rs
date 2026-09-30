@@ -499,6 +499,35 @@ impl DiskWriteBatch {
         let db = &zakura_db.db;
         let FinalizedBlock { block, height, .. } = finalized;
 
+        // The normal write path has already read the current records into the `Insert`
+        // variant. Keep their balances before mutating the records so the explorer ranking
+        // does not repeat one RocksDB lookup for every changed address. During a format upgrade,
+        // `Merge` only carries deltas, so read the authoritative balances once here.
+        #[cfg(feature = "indexer")]
+        let previous_balance_zat = match &address_balances {
+            AddressBalanceLocationUpdates::Insert(balances) => balances
+                .iter()
+                .map(|(&address, balance)| {
+                    (
+                        address,
+                        u64::try_from(balance.balance().zatoshis())
+                            .expect("finalized transparent balances are nonnegative"),
+                    )
+                })
+                .collect(),
+            AddressBalanceLocationUpdates::Merge(changes) => changes
+                .keys()
+                .filter_map(|&address| {
+                    let balance = zakura_db.address_balance_location(&address)?;
+                    Some((
+                        address,
+                        u64::try_from(balance.balance().zatoshis())
+                            .expect("finalized transparent balances are nonnegative"),
+                    ))
+                })
+                .collect(),
+        };
+
         // Update the in-memory `address_balances` transaction-by-transaction, debiting inputs
         // before crediting outputs within each transaction. This ordering keeps every
         // intermediate per-address balance within the consensus range, even when the block
@@ -513,8 +542,11 @@ impl DiskWriteBatch {
         );
 
         #[cfg(feature = "indexer")]
-        let funded_transparent_address_count =
-            self.prepare_explorer_balance_order_batch(zakura_db, &address_balances);
+        let funded_transparent_address_count = self.prepare_explorer_balance_order_batch(
+            zakura_db,
+            &address_balances,
+            &previous_balance_zat,
+        );
         #[cfg(not(feature = "indexer"))]
         let funded_transparent_address_count = 0;
 

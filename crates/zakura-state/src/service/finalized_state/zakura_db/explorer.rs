@@ -402,18 +402,19 @@ impl DiskWriteBatch {
         &mut self,
         zakura_db: &ZakuraDb,
         updates: &AddressBalanceLocationUpdates,
+        previous_balance_zat: &HashMap<zakura_chain::transparent::Address, u64>,
     ) -> u64 {
         let mut funded = zakura_db
             .explorer_chain_stats()
             .funded_transparent_address_count;
-        let mut apply = |address, new_balance_zat: u64| {
-            let old_balance_zat = zakura_db
-                .address_balance_location(&address)
-                .map(|record| {
-                    u64::try_from(record.balance().zatoshis())
-                        .expect("finalized transparent balances are nonnegative")
-                })
-                .unwrap_or(0);
+        let mut apply = |address, old_balance_zat: u64, new_balance_zat: u64| {
+            // A block can spend and recreate the same balance for an address. Its address
+            // aggregates still change, but its ordered ranking key does not. Avoid generating
+            // a redundant tombstone and insertion for that common case.
+            if old_balance_zat == new_balance_zat {
+                return;
+            }
+
             let ranking = zakura_db
                 .explorer_balance_order_cf()
                 .with_batch_for_writing(self);
@@ -447,6 +448,7 @@ impl DiskWriteBatch {
                 for (&address, balance) in balances {
                     apply(
                         address,
+                        previous_balance_zat.get(&address).copied().unwrap_or(0),
                         u64::try_from(balance.balance().zatoshis())
                             .expect("prepared transparent balances are nonnegative"),
                     );
@@ -454,15 +456,14 @@ impl DiskWriteBatch {
             }
             AddressBalanceLocationUpdates::Merge(changes) => {
                 for (&address, change) in changes {
-                    let old = zakura_db
-                        .address_balance_location(&address)
-                        .map(|record| record.balance().zatoshis())
-                        .unwrap_or(0);
-                    let new = old
+                    let old_balance_zat = previous_balance_zat.get(&address).copied().unwrap_or(0);
+                    let new = i64::try_from(old_balance_zat)
+                        .expect("transparent balances fit in i64")
                         .checked_add(change.balance().zatoshis())
                         .expect("verified transparent balance update stays in the money range");
                     apply(
                         address,
+                        old_balance_zat,
                         u64::try_from(new)
                             .expect("verified transparent balance remains nonnegative"),
                     );
@@ -501,6 +502,9 @@ impl DiskWriteBatch {
                         .expect("rolled-back transparent balances are nonnegative")
                 })
                 .unwrap_or(0);
+            if old_balance_zat == new_balance_zat {
+                continue;
+            }
             let ranking = zakura_db
                 .explorer_balance_order_cf()
                 .with_batch_for_writing(self);
@@ -1042,6 +1046,22 @@ fn count_u32(count: usize) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use zakura_chain::{
+        amount::{Amount, NonNegative},
+        block::Height,
+        parameters::NetworkKind,
+        transparent::Address,
+    };
+
+    use crate::{
+        constants::{state_database_format_version_in_code, STATE_DATABASE_KIND},
+        service::finalized_state::{
+            disk_format::transparent::{AddressBalanceLocation, OutputLocation},
+            STATE_COLUMN_FAMILIES_IN_CODE,
+        },
+        Config,
+    };
+
     use super::*;
 
     #[test]
@@ -1058,5 +1078,33 @@ mod tests {
             ExplorerAmountBucket::from_amount(Some(100_000_000_000)),
             ExplorerAmountBucket::AtLeastOneHundredBillion
         );
+    }
+
+    #[test]
+    fn unchanged_balance_does_not_rewrite_the_ordered_index() {
+        let network = Network::Mainnet;
+        let db = ZakuraDb::new(
+            &Config::ephemeral(),
+            STATE_DATABASE_KIND,
+            &state_database_format_version_in_code(),
+            &network,
+            true,
+            STATE_COLUMN_FAMILIES_IN_CODE
+                .iter()
+                .map(ToString::to_string),
+            false,
+        )
+        .expect("opening an ephemeral database should succeed");
+        let address = Address::from_pub_key_hash(NetworkKind::Mainnet, [1; 20]);
+        let mut balance = AddressBalanceLocation::new(OutputLocation::from_usize(Height(1), 0, 0));
+        *balance.balance_mut() =
+            Amount::<NonNegative>::try_from(10).expect("test balance is valid");
+        let updates = AddressBalanceLocationUpdates::Insert(HashMap::from([(address, balance)]));
+        let previous_balance_zat = HashMap::from([(address, 10)]);
+
+        let mut batch = DiskWriteBatch::new();
+        batch.prepare_explorer_balance_order_batch(&db, &updates, &previous_balance_zat);
+
+        assert_eq!(batch, DiskWriteBatch::new());
     }
 }

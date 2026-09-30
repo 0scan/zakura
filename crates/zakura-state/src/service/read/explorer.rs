@@ -412,23 +412,25 @@ pub fn explorer_balance_rank_page(
 
     let requested =
         usize::try_from(limit.clamp(1, 100)).expect("explorer balance page limit fits in usize");
+    let page_size = requested.saturating_add(1);
+    // The first page and the concentration summary both start at the richest address. Read the
+    // larger of those ranges once instead of seeking and decoding the same keys twice.
+    let scan_size = if cursor.is_none() {
+        page_size.max(100)
+    } else {
+        page_size
+    };
     let mut entries = db.explorer_balance_entries(
         cursor.map(|cursor| (cursor.address, cursor.balance_zat)),
-        requested.saturating_add(1),
+        scan_size,
     );
+    let (top_10_balance_zat, top_100_balance_zat) = if cursor.is_none() {
+        top_balance_totals(&entries)
+    } else {
+        top_balance_totals(&db.explorer_balance_entries(None, 100))
+    };
     let has_more = entries.len() > requested;
     entries.truncate(requested);
-    let summary = db.explorer_balance_entries(None, 100);
-    let top_10_balance_zat = summary.iter().take(10).fold(0_u64, |total, entry| {
-        total
-            .checked_add(entry.balance_zat)
-            .expect("transparent supply bounds top balances")
-    });
-    let top_100_balance_zat = summary.iter().fold(0_u64, |total, entry| {
-        total
-            .checked_add(entry.balance_zat)
-            .expect("transparent supply bounds top balances")
-    });
     let totals = db.explorer_chain_stats();
     let transparent_supply_zat = best_tip
         .and_then(|(height, _)| db.explorer_block_stats(height))
@@ -445,6 +447,25 @@ pub fn explorer_balance_rank_page(
         top_100_balance_zat,
         has_more,
     }
+}
+
+fn top_balance_totals(entries: &[crate::ExplorerBalanceRankEntry]) -> (u64, u64) {
+    entries.iter().take(100).enumerate().fold(
+        (0_u64, 0_u64),
+        |(top_10, top_100), (index, entry)| {
+            let top_100 = top_100
+                .checked_add(entry.balance_zat)
+                .expect("transparent supply bounds top balances");
+            let top_10 = if index < 10 {
+                top_10
+                    .checked_add(entry.balance_zat)
+                    .expect("transparent supply bounds top balances")
+            } else {
+                top_10
+            };
+            (top_10, top_100)
+        },
+    )
 }
 
 fn explorer_transaction_summary_at_location(
@@ -566,4 +587,23 @@ fn non_finalized_summaries(
     }
 
     summaries
+}
+
+#[cfg(test)]
+mod tests {
+    use zakura_chain::{parameters::NetworkKind, transparent::Address};
+
+    use super::top_balance_totals;
+
+    #[test]
+    fn top_balance_totals_use_only_the_first_hundred_entries() {
+        let entries = (0..105)
+            .map(|index| crate::ExplorerBalanceRankEntry {
+                address: Address::from_pub_key_hash(NetworkKind::Mainnet, [index; 20]),
+                balance_zat: 1,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(top_balance_totals(&entries), (10, 100));
+    }
 }
