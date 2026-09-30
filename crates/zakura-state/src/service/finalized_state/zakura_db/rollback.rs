@@ -57,7 +57,7 @@ use crate::{
 };
 
 #[cfg(feature = "indexer")]
-use crate::service::finalized_state::zakura_db::explorer::PendingExplorerAddressRecords;
+use crate::explorer::PendingExplorerAddressRecords;
 
 /// Options for rolling back the finalized state.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1454,7 +1454,7 @@ impl DiskWriteBatch {
         // for the genesis block. This also ignores genesis shielded value pool updates, but there
         // aren't any of those on mainnet or testnet.
         #[cfg(feature = "indexer")]
-        let mut explorer_context = super::explorer::ExplorerBlockCommitContext::new(zakura_db);
+        let mut explorer_context = crate::explorer::ExplorerBlockCommitContext::new(zakura_db);
         if !finalized.height.is_min() {
             // Commit transaction indexes
             self.prepare_transparent_transaction_batch(

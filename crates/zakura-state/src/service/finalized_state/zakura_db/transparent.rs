@@ -495,7 +495,7 @@ impl DiskWriteBatch {
             OutputLocation,
         >,
         #[cfg(feature = "indexer")]
-        explorer_context: &mut super::explorer::ExplorerBlockCommitContext,
+        explorer_context: &mut crate::explorer::ExplorerBlockCommitContext,
         mut address_balances: AddressBalanceLocationUpdates,
     ) {
         let db = &zakura_db.db;

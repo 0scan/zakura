@@ -82,9 +82,6 @@ pub mod watch_receiver;
 
 pub mod check;
 
-#[cfg(feature = "indexer")]
-mod explorer_analytics;
-
 pub(crate) mod finalized_state;
 pub(crate) mod non_finalized_state;
 mod pending_utxos;
@@ -2977,11 +2974,9 @@ impl Service<ReadRequest> for ReadStateService {
             )),
 
             #[cfg(feature = "indexer")]
-            ReadRequest::Explorer(request) => Ok(ReadResponse::Explorer(read::explorer::handle(
-                state.latest_best_chain(),
-                &state.db,
-                request,
-            )?)),
+            ReadRequest::Explorer(request) => Ok(ReadResponse::Explorer(
+                crate::explorer::read::handle(state.latest_best_chain(), &state.db, request)?,
+            )),
 
             ReadRequest::AnyChainTransaction(hash) => {
                 Ok(ReadResponse::AnyChainTransaction(read::any_transaction(

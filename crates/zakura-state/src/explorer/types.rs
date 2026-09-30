@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use zakura_chain::{block, transaction, transparent};
 
-pub use crate::service::finalized_state::{
+pub use super::storage::disk_format::{
     ExplorerAddressRecord, ExplorerShieldedFlow, ExplorerShieldedPool, ExplorerTransactionKind,
     ExplorerTransactionRecord,
 };

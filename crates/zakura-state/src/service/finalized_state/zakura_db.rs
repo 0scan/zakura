@@ -34,8 +34,6 @@ pub mod block;
 pub mod chain;
 #[allow(dead_code)]
 pub(crate) mod commitment_roots_db;
-#[cfg(feature = "indexer")]
-pub mod explorer;
 #[allow(dead_code)]
 pub mod highest_completed_checkpoint;
 pub mod metrics;
@@ -110,6 +108,12 @@ pub struct ZakuraDb {
 }
 
 impl ZakuraDb {
+    /// Returns the low-level database used by crate-local typed storage extensions.
+    #[cfg(feature = "indexer")]
+    pub(crate) fn disk_db(&self) -> &DiskDb {
+        &self.db
+    }
+
     /// Clone the shared low-level database for the atomic header-chain migration.
     pub(in crate::service) fn header_chain_disk_db(&self) -> DiskDb {
         self.db.clone()

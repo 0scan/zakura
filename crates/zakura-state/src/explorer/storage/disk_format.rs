@@ -10,8 +10,7 @@ use zakura_chain::{
 };
 
 use crate::service::finalized_state::{
-    disk_format::{block::TRANSACTION_LOCATION_DISK_BYTES, FromDisk, IntoDisk},
-    TransactionLocation,
+    FromDisk, IntoDisk, TransactionLocation, TRANSACTION_LOCATION_DISK_BYTES,
 };
 use crate::{ExplorerBlockStats, ExplorerChainStats, ExplorerDailyStats};
 
@@ -623,12 +622,16 @@ mod tests {
 
     #[test]
     fn analytics_values_round_trip_stable_encoding() {
-        let mut chain = ExplorerChainStats::default();
-        chain.block_count = 42;
-        chain.total_fees_zat = 1_000;
-        let mut daily = ExplorerDailyStats::default();
-        daily.day = 20_000;
-        daily.end_height = 2_000_000;
+        let chain = ExplorerChainStats {
+            block_count: 42,
+            total_fees_zat: 1_000,
+            ..Default::default()
+        };
+        let daily = ExplorerDailyStats {
+            day: 20_000,
+            end_height: 2_000_000,
+            ..Default::default()
+        };
 
         assert_eq!(ExplorerChainStats::from_bytes(chain.as_bytes()), chain);
         assert_eq!(ExplorerDailyStats::from_bytes(daily.as_bytes()), daily);

@@ -21,10 +21,11 @@ use zakura_chain::{
 };
 
 use crate::{
-    service::finalized_state::explorer_transaction_record_with_utxos, ExplorerBlockStats,
-    ExplorerChainStats, ExplorerDailyStats, ExplorerIntervalStats, ExplorerShieldedFlow,
-    ExplorerShieldedPool, ExplorerTransactionKind, TransactionLocation,
+    ExplorerBlockStats, ExplorerChainStats, ExplorerDailyStats, ExplorerIntervalStats,
+    ExplorerShieldedFlow, ExplorerShieldedPool, ExplorerTransactionKind, TransactionLocation,
 };
+
+use super::storage::explorer_transaction_record_with_utxos;
 
 const SECONDS_PER_DAY: i64 = 86_400;
 const ZIP318_EXPIRY_MODULUS: u32 = 34_560;

@@ -15,11 +15,14 @@ use crate::{
     },
     request::Spend,
     service::{
-        finalized_state::{explorer_transaction_record_with_ordered_utxos, ZakuraDb},
+        finalized_state::ZakuraDb,
         non_finalized_state::Chain,
+        read::{block_and_size, spending_transaction_hash, transparent_balance},
     },
     TransactionLocation,
 };
+
+use super::storage::explorer_transaction_record_with_ordered_utxos;
 
 const EXPLORER_ROLLING_SCAN_LIMIT: u32 = 10_000;
 const ROLLING_WINDOW_SECONDS: i64 = 86_400;
@@ -51,12 +54,8 @@ pub fn handle(
                 outpoints
                     .iter()
                     .map(|outpoint| {
-                        super::spending_transaction_hash(
-                            chain.clone(),
-                            db,
-                            Spend::OutPoint(*outpoint),
-                        )
-                        .is_some()
+                        spending_transaction_hash(chain.clone(), db, Spend::OutPoint(*outpoint))
+                            .is_some()
                     })
                     .collect(),
             )
@@ -101,8 +100,7 @@ pub fn explorer_block_summaries(
     heights
         .iter()
         .map(|height| {
-            let (block, serialized_size) =
-                super::block_and_size(chain.clone(), db, (*height).into())?;
+            let (block, serialized_size) = block_and_size(chain.clone(), db, (*height).into())?;
             let total_fees_zat = if let Some(contextual) = chain
                 .as_ref()
                 .and_then(|chain| chain.block((*height).into()))
@@ -289,7 +287,7 @@ pub fn explorer_address_page(
         .map(|chain| chain.non_finalized_tip())
         .or(finalized_tip);
     let addresses = HashSet::from([address]);
-    let (balance, received_zat) = super::transparent_balance(chain.clone(), db, addresses.clone())?;
+    let (balance, received_zat) = transparent_balance(chain.clone(), db, addresses.clone())?;
 
     let mut locations =
         db.explorer_address_transaction_locations(address, cursor, direction, scan_limit);
@@ -430,7 +428,7 @@ pub fn explorer_stats_snapshot(db: &ZakuraDb) -> crate::ExplorerStatsSnapshot {
             complete = true;
             break;
         }
-        crate::service::explorer_analytics::add_block_to_chain_stats(&mut rolling, &block);
+        crate::explorer::analytics::add_block_to_chain_stats(&mut rolling, &block);
         oldest_timestamp = oldest_timestamp.min(block.timestamp);
         match height.previous() {
             Ok(previous) => height = previous,

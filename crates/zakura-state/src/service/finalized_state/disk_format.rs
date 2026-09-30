@@ -9,8 +9,6 @@ use std::{io::Write, sync::Arc};
 
 pub mod block;
 pub mod chain;
-#[cfg(feature = "indexer")]
-pub mod explorer;
 pub mod header_chain;
 pub mod header_chain_values;
 pub mod shielded;

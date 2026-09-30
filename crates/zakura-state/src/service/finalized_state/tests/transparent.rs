@@ -172,10 +172,7 @@ fn intra_block_self_spend_chain_in_finalized_state() {
     let zakura_db = new_ephemeral_zakura_db(&network);
     let mut batch = DiskWriteBatch::new();
     #[cfg(feature = "indexer")]
-    let mut explorer_context =
-        crate::service::finalized_state::zakura_db::explorer::ExplorerBlockCommitContext::new(
-            &zakura_db,
-        );
+    let mut explorer_context = crate::explorer::ExplorerBlockCommitContext::new(&zakura_db);
     #[cfg(feature = "indexer")]
     let spent_output_locations = HashMap::from([
         (existing_outpoint, existing_output_location),

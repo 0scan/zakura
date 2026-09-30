@@ -290,7 +290,7 @@ impl DiskWriteBatch {
         finalized: &FinalizedBlock,
         utxos_spent_by_block: HashMap<transparent::OutPoint, transparent::Utxo>,
         value_pool: ValueBalance<NonNegative>,
-        #[cfg(feature = "indexer")] explorer_context: super::explorer::ExplorerBlockCommitContext,
+        #[cfg(feature = "indexer")] explorer_context: crate::explorer::ExplorerBlockCommitContext,
     ) -> Result<(), ValidateContextError> {
         let block_value_pool_change = finalized
             .block

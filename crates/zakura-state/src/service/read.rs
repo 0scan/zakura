@@ -18,8 +18,6 @@ pub mod address;
 pub mod block;
 pub mod chain_tips;
 pub mod difficulty;
-#[cfg(feature = "indexer")]
-pub mod explorer;
 pub mod find;
 pub mod historical_tree;
 pub mod tree;

@@ -22,17 +22,17 @@ use std::{
     },
 };
 
+#[cfg(feature = "indexer")]
+use crate::explorer::{
+    EXPLORER_ADDRESS_META, EXPLORER_BALANCE_ORDER, EXPLORER_BLOCK_STATS, EXPLORER_CHAIN_STATS,
+    EXPLORER_DAILY_STATS, EXPLORER_SCHEMA, EXPLORER_SHIELDED_TRANSACTION_BY_CLASS_LOC,
+    EXPLORER_TRANSACTION_BY_KIND_LOC, EXPLORER_TRANSACTION_META_BY_LOC,
+};
 use zakura_chain::{
     block, ironwood, orchard,
     parallel::tree::NoteCommitmentTrees,
     parameters::{Network, NetworkUpgrade},
     sapling,
-};
-#[cfg(feature = "indexer")]
-use zakura_db::explorer::{
-    EXPLORER_ADDRESS_META, EXPLORER_BALANCE_ORDER, EXPLORER_BLOCK_STATS, EXPLORER_CHAIN_STATS,
-    EXPLORER_DAILY_STATS, EXPLORER_SCHEMA, EXPLORER_SHIELDED_TRANSACTION_BY_CLASS_LOC,
-    EXPLORER_TRANSACTION_BY_KIND_LOC, EXPLORER_TRANSACTION_META_BY_LOC,
 };
 use zakura_db::{
     block::{RetentionPlan, ZAKURA_HEADER_BODY_SIZE_BY_HEIGHT},
@@ -116,9 +116,9 @@ pub use commitment_aux::{
 #[allow(unused_imports)]
 pub use disk_db::{DiskDb, DiskWriteBatch, ReadDisk, WriteDisk};
 #[cfg(feature = "indexer")]
-pub use disk_format::explorer::{
-    ExplorerAddressRecord, ExplorerShieldedFlow, ExplorerShieldedPool, ExplorerTransactionKind,
-    ExplorerTransactionRecord,
+pub(crate) use disk_format::{
+    block::TRANSACTION_LOCATION_DISK_BYTES,
+    transparent::{AddressBalanceLocation, AddressBalanceLocationUpdates},
 };
 #[allow(unused_imports)]
 pub use disk_format::{
@@ -152,10 +152,6 @@ pub use vct_treestate_audit::{
 };
 #[allow(unused_imports)]
 pub use zakura_db::commitment_roots_db::{CommitmentRootIndexIssue, COMMITMENT_ROOTS_BY_HEIGHT};
-#[cfg(feature = "indexer")]
-pub(crate) use zakura_db::explorer::{
-    explorer_transaction_record_with_ordered_utxos, explorer_transaction_record_with_utxos,
-};
 #[allow(unused_imports)]
 pub use zakura_db::highest_completed_checkpoint::*;
 pub use zakura_db::ZakuraDb;
