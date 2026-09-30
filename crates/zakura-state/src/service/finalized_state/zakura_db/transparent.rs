@@ -18,6 +18,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "indexer")]
+use std::ops::Bound::{Excluded, Included};
+
 use rocksdb::ColumnFamily;
 use zakura_chain::{
     amount::{self, Amount, Constraint, NonNegative},
@@ -325,6 +328,65 @@ impl ZakuraDb {
             .collect()
     }
 
+    /// Returns cursor-adjacent finalized transaction locations for `address`.
+    #[cfg(feature = "indexer")]
+    pub fn explorer_address_transaction_locations(
+        &self,
+        address: transparent::Address,
+        cursor: Option<TransactionLocation>,
+        direction: crate::ExplorerPageDirection,
+        limit: usize,
+    ) -> Vec<TransactionLocation> {
+        let Some(address_location) = self.address_location(&address) else {
+            return Vec::new();
+        };
+        let column = self.db.cf_handle("tx_loc_by_transparent_addr_loc").unwrap();
+        let minimum = AddressTransaction::new(address_location, TransactionLocation::MIN);
+        let maximum = AddressTransaction::new(address_location, TransactionLocation::MAX);
+
+        match direction {
+            crate::ExplorerPageDirection::Older => {
+                let upper = cursor.map_or(Included(maximum), |location| {
+                    Excluded(AddressTransaction::new(address_location, location))
+                });
+                self.db
+                    .zs_reverse_range_iter(&column, (Included(minimum), upper))
+                    .take(limit)
+                    .map(|(entry, ())| entry.transaction_location())
+                    .collect()
+            }
+            crate::ExplorerPageDirection::Newer => {
+                let lower = cursor.map_or(Included(minimum), |location| {
+                    Excluded(AddressTransaction::new(address_location, location))
+                });
+                self.db
+                    .zs_forward_range_iter(&column, (lower, Included(maximum)))
+                    .take(limit)
+                    .map(|(entry, ())| entry.transaction_location())
+                    .collect()
+            }
+        }
+    }
+
+    /// Returns whether `location` is indexed for `address` in finalized state.
+    #[cfg(feature = "indexer")]
+    pub fn explorer_address_contains_transaction(
+        &self,
+        address: transparent::Address,
+        location: TransactionLocation,
+    ) -> bool {
+        let Some(address_location) = self.address_location(&address) else {
+            return false;
+        };
+        let column = self.db.cf_handle("tx_loc_by_transparent_addr_loc").unwrap();
+        self.db
+            .zs_get::<_, _, ()>(
+                &column,
+                &AddressTransaction::new(address_location, location),
+            )
+            .is_some()
+    }
+
     // Address index queries
 
     /// Returns the total transparent balance and received balance for `addresses` in the finalized chain.
@@ -432,10 +494,41 @@ impl DiskWriteBatch {
             transparent::OutPoint,
             OutputLocation,
         >,
+        #[cfg(feature = "indexer")]
+        explorer_context: &mut crate::explorer::ExplorerBlockCommitContext,
         mut address_balances: AddressBalanceLocationUpdates,
     ) {
         let db = &zakura_db.db;
         let FinalizedBlock { block, height, .. } = finalized;
+
+        // The normal write path has already read the current records into the `Insert`
+        // variant. Keep their balances before mutating the records so the explorer ranking
+        // does not repeat one RocksDB lookup for every changed address. During a format upgrade,
+        // `Merge` only carries deltas, so read the authoritative balances once here.
+        #[cfg(feature = "indexer")]
+        let previous_balance_zat = match &address_balances {
+            AddressBalanceLocationUpdates::Insert(balances) => balances
+                .iter()
+                .map(|(&address, balance)| {
+                    (
+                        address,
+                        u64::try_from(balance.balance().zatoshis())
+                            .expect("finalized transparent balances are nonnegative"),
+                    )
+                })
+                .collect(),
+            AddressBalanceLocationUpdates::Merge(changes) => changes
+                .keys()
+                .filter_map(|&address| {
+                    let balance = zakura_db.address_balance_location(&address)?;
+                    Some((
+                        address,
+                        u64::try_from(balance.balance().zatoshis())
+                            .expect("finalized transparent balances are nonnegative"),
+                    ))
+                })
+                .collect(),
+        };
 
         // Update the in-memory `address_balances` transaction-by-transaction, debiting inputs
         // before crediting outputs within each transaction. This ordering keeps every
@@ -448,6 +541,15 @@ impl DiskWriteBatch {
             &block.transactions,
             spent_utxos_by_outpoint,
             &mut address_balances,
+        );
+
+        #[cfg(feature = "indexer")]
+        explorer_context.set_funded_transparent_address_count(
+            self.prepare_explorer_balance_order_batch(
+                zakura_db,
+                &address_balances,
+                &previous_balance_zat,
+            ),
         );
 
         // Write the new and spent transparent output index entries. These passes no longer

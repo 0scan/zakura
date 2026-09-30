@@ -108,6 +108,12 @@ pub struct ZakuraDb {
 }
 
 impl ZakuraDb {
+    /// Returns the low-level database used by crate-local typed storage extensions.
+    #[cfg(feature = "indexer")]
+    pub(crate) fn disk_db(&self) -> &DiskDb {
+        &self.db
+    }
+
     /// Clone the shared low-level database for the atomic header-chain migration.
     pub(in crate::service) fn header_chain_disk_db(&self) -> DiskDb {
         self.db.clone()
@@ -238,6 +244,9 @@ impl ZakuraDb {
         }
 
         db.run_startup_format_change(format_change)?;
+
+        #[cfg(feature = "indexer")]
+        db.ensure_explorer_schema(read_only)?;
 
         Ok(db)
     }

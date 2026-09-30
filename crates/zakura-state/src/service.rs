@@ -2973,6 +2973,11 @@ impl Service<ReadRequest> for ReadStateService {
                 read::mined_transaction(state.latest_best_chain(), &state.db, hash),
             )),
 
+            #[cfg(feature = "indexer")]
+            ReadRequest::Explorer(request) => Ok(ReadResponse::Explorer(
+                crate::explorer::read::handle(state.latest_best_chain(), &state.db, request)?,
+            )),
+
             ReadRequest::AnyChainTransaction(hash) => {
                 Ok(ReadResponse::AnyChainTransaction(read::any_transaction(
                     state.latest_non_finalized_state().chain_iter(),

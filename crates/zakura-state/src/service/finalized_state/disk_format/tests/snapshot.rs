@@ -70,6 +70,9 @@ fn test_raw_rocksdb_column_families_with_network(network: Network) {
 
     // Assert that column family names are the same, regardless of the network.
     // Later, we check they are also the same regardless of the block height.
+    #[cfg(feature = "indexer")]
+    insta::assert_ron_snapshot!("column_family_names_with_indexer", cf_names);
+    #[cfg(not(feature = "indexer"))]
     insta::assert_ron_snapshot!("column_family_names", cf_names);
 
     // Assert that empty databases are the same, regardless of the network.
@@ -132,7 +135,7 @@ fn snapshot_raw_rocksdb_column_family_data(db: &DiskDb, original_cf_names: &[Str
 
         if cf_name == "default" {
             assert_eq!(cf_data.len(), 0, "default column family is never used");
-        } else if cf_data.is_empty() {
+        } else if cf_data.is_empty() && !cf_name.starts_with("explorer_") {
             // distinguish column family names from empty column families
             empty_column_families.push(format!("{cf_name}: no entries"));
         } else if skip_raw_data_snapshot(cf_name) {
@@ -142,7 +145,12 @@ fn snapshot_raw_rocksdb_column_family_data(db: &DiskDb, original_cf_names: &[Str
             // The note commitment tree snapshots will change if the trees do not have cached roots.
             // But we expect them to always have cached roots,
             // because those roots are used to populate the anchor column families.
-            insta::assert_ron_snapshot!(format!("{cf_name}_raw_data"), cf_data);
+            let snapshot_name = if cfg!(feature = "indexer") && cf_name.starts_with("explorer_") {
+                format!("{cf_name}_raw_data_with_indexer")
+            } else {
+                format!("{cf_name}_raw_data")
+            };
+            insta::assert_ron_snapshot!(snapshot_name, cf_data);
         }
     }
 
@@ -150,5 +158,8 @@ fn snapshot_raw_rocksdb_column_family_data(db: &DiskDb, original_cf_names: &[Str
 }
 
 fn skip_raw_data_snapshot(cf_name: &str) -> bool {
-    matches!(cf_name, COMMITMENT_ROOTS_BY_HEIGHT | VCT_UPGRADE_METADATA)
+    matches!(
+        cf_name,
+        COMMITMENT_ROOTS_BY_HEIGHT | "explorer_schema" | VCT_UPGRADE_METADATA
+    )
 }

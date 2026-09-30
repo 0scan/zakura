@@ -404,6 +404,13 @@ impl StartCmd {
             .validate_storage_mode(&config.network.network)
             .map_err(|error| eyre!("invalid state storage configuration: {error}"))?;
 
+        #[cfg(feature = "indexer")]
+        if config.state.storage_mode != StorageMode::Archive {
+            return Err(eyre!(
+                "the explorer APIs require state.storage_mode = 'archive' because historical block and transaction details read canonical state bodies"
+            ));
+        }
+
         let (_, max_checkpoint_height) = zakura_consensus::router::init_checkpoint_list(
             config.consensus.clone(),
             &config.network.network,
@@ -736,7 +743,6 @@ impl StartCmd {
         let rpc_impl = rpc_impl.with_end_of_support_height(
             sync::end_of_support::end_of_support_height(&config.network.network),
         );
-
         let node_services = ready.as_ref().map(|_| crate::node::NodeServices {
             read_state: read_only_state_service.clone(),
             latest_chain_tip: latest_chain_tip.clone(),

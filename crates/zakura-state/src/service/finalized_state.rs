@@ -22,6 +22,12 @@ use std::{
     },
 };
 
+#[cfg(feature = "indexer")]
+use crate::explorer::{
+    EXPLORER_ADDRESS_META, EXPLORER_BALANCE_ORDER, EXPLORER_BLOCK_STATS, EXPLORER_CHAIN_STATS,
+    EXPLORER_DAILY_STATS, EXPLORER_SCHEMA, EXPLORER_SHIELDED_TRANSACTION_BY_CLASS_LOC,
+    EXPLORER_TRANSACTION_BY_KIND_LOC, EXPLORER_TRANSACTION_META_BY_LOC,
+};
 use zakura_chain::{
     block, ironwood, orchard,
     parallel::tree::NoteCommitmentTrees,
@@ -109,6 +115,11 @@ pub use commitment_aux::{
 };
 #[allow(unused_imports)]
 pub use disk_db::{DiskDb, DiskWriteBatch, ReadDisk, WriteDisk};
+#[cfg(feature = "indexer")]
+pub(crate) use disk_format::{
+    block::TRANSACTION_LOCATION_DISK_BYTES,
+    transparent::{AddressBalanceLocation, AddressBalanceLocationUpdates},
+};
 #[allow(unused_imports)]
 pub use disk_format::{
     FallibleDiskValue, FromDisk, IntoDisk, OutputLocation, RawBytes, TransactionIndex,
@@ -190,6 +201,24 @@ pub const STATE_COLUMN_FAMILIES_IN_CODE: &[&str] = &[
     "tx_by_loc",
     "hash_by_tx_loc",
     "tx_loc_by_hash",
+    #[cfg(feature = "indexer")]
+    EXPLORER_SCHEMA,
+    #[cfg(feature = "indexer")]
+    EXPLORER_TRANSACTION_META_BY_LOC,
+    #[cfg(feature = "indexer")]
+    EXPLORER_TRANSACTION_BY_KIND_LOC,
+    #[cfg(feature = "indexer")]
+    EXPLORER_SHIELDED_TRANSACTION_BY_CLASS_LOC,
+    #[cfg(feature = "indexer")]
+    EXPLORER_ADDRESS_META,
+    #[cfg(feature = "indexer")]
+    EXPLORER_BLOCK_STATS,
+    #[cfg(feature = "indexer")]
+    EXPLORER_CHAIN_STATS,
+    #[cfg(feature = "indexer")]
+    EXPLORER_DAILY_STATS,
+    #[cfg(feature = "indexer")]
+    EXPLORER_BALANCE_ORDER,
     // Transparent
     BALANCE_BY_TRANSPARENT_ADDR,
     "tx_loc_by_transparent_addr_loc",

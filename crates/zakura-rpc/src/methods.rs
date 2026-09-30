@@ -106,10 +106,17 @@ use crate::{
     },
 };
 
+mod explorer;
 pub(crate) mod hex_data;
 pub(crate) mod trees;
 pub(crate) mod types;
 
+use explorer::types::{
+    AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, ChartDataRequest,
+    ChartDataResponse, ExplorerNetworkStatsResponse, GetAddressTransactionsRequest,
+    GetBlocksRequest, GetTransactionsRequest, IndexerStatusResponse, MempoolTransactionsResponse,
+    TopBalancesRequest, TopBalancesResponse, TransactionDetailsResponse, TransactionsResponse,
+};
 use hex_data::HexData;
 use trees::{GetSubtreesByIndexResponse, GetTreestateResponse, SubtreeRpcData};
 use types::{
@@ -219,6 +226,17 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("getaddressutxos", RpcAccess::Unauthenticated),
     ("stop", RpcAccess::Test),
     ("getblockcount", RpcAccess::Unauthenticated),
+    ("getblocks", RpcAccess::Unauthenticated),
+    ("getblockdetails", RpcAccess::Unauthenticated),
+    ("gettransactions", RpcAccess::Unauthenticated),
+    ("getmempooltransactions", RpcAccess::Unauthenticated),
+    ("gettransactiondetails", RpcAccess::Unauthenticated),
+    ("getaddresssummary", RpcAccess::Unauthenticated),
+    ("getaddresstransactions", RpcAccess::Unauthenticated),
+    ("getindexerstatus", RpcAccess::Unauthenticated),
+    ("getnetworkstats", RpcAccess::Unauthenticated),
+    ("getexplorerchartdata", RpcAccess::Unauthenticated),
+    ("getexplorertopbalances", RpcAccess::Unauthenticated),
     ("getblockhash", RpcAccess::Unauthenticated),
     ("getblocktemplate", RpcAccess::Unauthenticated),
     ("submitblock", RpcAccess::Unauthenticated),
@@ -676,6 +694,139 @@ pub trait Rpc {
     #[method(name = "getblockcount")]
     fn get_block_count(&self) -> Result<u32>;
 
+    /// Returns a newest-first page of explorer block summaries from Zakura's
+    /// in-process RocksDB index.
+    ///
+    /// method: post
+    /// tags: blockchain
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, optional) Cursor pagination parameters.
+    #[method(name = "getblocks")]
+    async fn get_blocks(&self, request: Option<GetBlocksRequest>) -> Result<BlocksResponse>;
+
+    /// Returns complete explorer details for a canonical block from the
+    /// in-process state service and RocksDB index.
+    ///
+    /// method: post
+    /// tags: blockchain
+    ///
+    /// # Parameters
+    ///
+    /// - `hash_or_height`: (string, required) Canonical block hash or height.
+    #[method(name = "getblockdetails")]
+    async fn get_block_details(&self, hash_or_height: String) -> Result<BlockDetails>;
+
+    /// Returns a cursor-paginated, filterable page of canonical transactions
+    /// from Zakura's in-process RocksDB index.
+    ///
+    /// method: post
+    /// tags: transaction
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, optional) Cursor pagination and transaction filters.
+    #[method(name = "gettransactions")]
+    async fn get_transactions(
+        &self,
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<TransactionsResponse>;
+
+    /// Returns a cursor-paginated page of transactions currently in this node's mempool.
+    ///
+    /// method: post
+    /// tags: mempool
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, optional) Cursor pagination and transaction filters.
+    #[method(name = "getmempooltransactions")]
+    async fn get_mempool_transactions(
+        &self,
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<MempoolTransactionsResponse>;
+
+    /// Returns complete explorer details for one transaction from the live
+    /// mempool or, after confirmation, from the state service and RocksDB index.
+    ///
+    /// method: post
+    /// tags: transaction
+    ///
+    /// # Parameters
+    ///
+    /// - `txid`: (string, required) Transaction identifier in display byte order.
+    #[method(name = "gettransactiondetails")]
+    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetailsResponse>;
+
+    /// Returns indexed balance and general activity information for one
+    /// transparent address.
+    ///
+    /// method: post
+    /// tags: address
+    ///
+    /// # Parameters
+    ///
+    /// - `address`: (string, required) A transparent address for this network.
+    #[method(name = "getaddresssummary")]
+    async fn get_address_summary(&self, address: String) -> Result<AddressSummary>;
+
+    /// Returns a cursor-paginated page of canonical transactions involving one
+    /// transparent address.
+    ///
+    /// method: post
+    /// tags: address
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, required) Address and cursor pagination parameters.
+    #[method(name = "getaddresstransactions")]
+    async fn get_address_transactions(
+        &self,
+        request: GetAddressTransactionsRequest,
+    ) -> Result<AddressTransactionsResponse>;
+
+    /// Returns explorer index catch-up progress relative to the node state tip.
+    ///
+    /// method: post
+    /// tags: explorer
+    #[method(name = "getindexerstatus")]
+    async fn get_indexer_status(&self) -> Result<IndexerStatusResponse>;
+
+    /// Returns the P0 explorer overview from persisted canonical aggregates and
+    /// live node services.
+    ///
+    /// method: post
+    /// tags: explorer
+    #[method(name = "getnetworkstats")]
+    async fn get_network_stats(&self) -> Result<ExplorerNetworkStatsResponse>;
+
+    /// Returns date-paginated daily explorer chart snapshots.
+    ///
+    /// method: post
+    /// tags: explorer
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, required) Inclusive date range and page limit.
+    #[method(name = "getexplorerchartdata")]
+    async fn get_explorer_chart_data(&self, request: ChartDataRequest)
+        -> Result<ChartDataResponse>;
+
+    /// Returns the cursor-paginated transparent-address balance ranking.
+    ///
+    /// method: post
+    /// tags: explorer
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, required) Top-balances cursor and page limit.
+    #[method(name = "getexplorertopbalances")]
+    async fn get_explorer_top_balances(
+        &self,
+        request: TopBalancesRequest,
+    ) -> Result<TopBalancesResponse>;
+
     /// Returns the hash of the block of a given height iff the index argument correspond
     /// to a block in the best chain.
     ///
@@ -1006,6 +1157,8 @@ where
 
     /// Allows efficient access to the best tip of the blockchain.
     latest_chain_tip: Tip,
+
+    /// Read handle for the optional in-process explorer indexer.
 
     // Tasks
     //
@@ -2881,6 +3034,65 @@ where
 
     fn get_block_count(&self) -> Result<u32> {
         best_chain_tip_height(&self.latest_chain_tip).map(|height| height.0)
+    }
+
+    async fn get_blocks(&self, request: Option<GetBlocksRequest>) -> Result<BlocksResponse> {
+        self.explorer_get_blocks(request).await
+    }
+
+    async fn get_block_details(&self, hash_or_height: String) -> Result<BlockDetails> {
+        self.explorer_get_block_details(hash_or_height).await
+    }
+
+    async fn get_transactions(
+        &self,
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<TransactionsResponse> {
+        self.explorer_get_transactions(request).await
+    }
+
+    async fn get_mempool_transactions(
+        &self,
+        request: Option<GetTransactionsRequest>,
+    ) -> Result<MempoolTransactionsResponse> {
+        self.explorer_get_mempool_transactions(request).await
+    }
+
+    async fn get_transaction_details(&self, txid: String) -> Result<TransactionDetailsResponse> {
+        self.explorer_get_transaction_details(txid).await
+    }
+
+    async fn get_address_summary(&self, address: String) -> Result<AddressSummary> {
+        self.explorer_get_address_summary(address).await
+    }
+
+    async fn get_address_transactions(
+        &self,
+        request: GetAddressTransactionsRequest,
+    ) -> Result<AddressTransactionsResponse> {
+        self.explorer_get_address_transactions(request).await
+    }
+
+    async fn get_indexer_status(&self) -> Result<IndexerStatusResponse> {
+        self.explorer_get_indexer_status().await
+    }
+
+    async fn get_network_stats(&self) -> Result<ExplorerNetworkStatsResponse> {
+        self.explorer_get_network_stats().await
+    }
+
+    async fn get_explorer_chart_data(
+        &self,
+        request: ChartDataRequest,
+    ) -> Result<ChartDataResponse> {
+        self.explorer_get_chart_data(request).await
+    }
+
+    async fn get_explorer_top_balances(
+        &self,
+        request: TopBalancesRequest,
+    ) -> Result<TopBalancesResponse> {
+        self.explorer_get_top_balances(request).await
     }
 
     async fn get_block_hash(&self, index: i32) -> Result<GetBlockHashResponse> {

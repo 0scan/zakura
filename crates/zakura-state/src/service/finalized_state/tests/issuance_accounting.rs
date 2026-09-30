@@ -554,11 +554,13 @@ proptest::proptest! {
 }
 
 #[test]
+#[cfg(not(feature = "indexer"))]
 fn startup_migration_failure_preserves_version_and_retry_matches_fresh_sync() {
     migration_retry_matches_fresh_sync(accounting_network(false));
 }
 
 #[test]
+#[cfg(not(feature = "indexer"))]
 fn derived_nsm_seed_migration_retry_matches_fresh_sync() {
     migration_retry_matches_fresh_sync(Network::new_regtest(RegtestParameters {
         activation_heights: ConfiguredActivationHeights {
@@ -569,6 +571,7 @@ fn derived_nsm_seed_migration_retry_matches_fresh_sync() {
     }));
 }
 
+#[cfg(not(feature = "indexer"))]
 fn migration_retry_matches_fresh_sync(network: Network) {
     use crate::{
         constants::{state_database_format_version_in_code, STATE_DATABASE_KIND},
@@ -628,7 +631,11 @@ fn migration_retry_matches_fresh_sync(network: Network) {
         .unwrap();
     drop(state);
     let old_path = config.db_path(STATE_DATABASE_KIND, 28, &network);
-    let new_path = config.db_path(STATE_DATABASE_KIND, 29, &network);
+    let new_path = config.db_path(
+        STATE_DATABASE_KIND,
+        state_database_format_version_in_code().major,
+        &network,
+    );
     std::fs::create_dir_all(old_path.parent().unwrap()).unwrap();
     std::fs::rename(&new_path, &old_path).unwrap();
     assert!(FinalizedState::new(&config, &network).is_err());

@@ -82,7 +82,7 @@ default = ["default-release-binaries"]
 
 # Production features that activate extra dependencies, or extra features in dependencies
 
-# Indexer support
+# Indexer and in-process explorer support
 indexer = ["zakura-state/indexer", "zakura-rpc/indexer"]
 
 # Per-block commit-phase timing histograms (zakura.state.write.*), for perf profiling

@@ -1453,6 +1453,8 @@ impl DiskWriteBatch {
         // So we ignore the genesis UTXO, transparent address index, and value pool updates
         // for the genesis block. This also ignores genesis shielded value pool updates, but there
         // aren't any of those on mainnet or testnet.
+        #[cfg(feature = "indexer")]
+        let mut explorer_context = crate::explorer::ExplorerBlockCommitContext::new(zakura_db);
         if !finalized.height.is_min() {
             // Commit transaction indexes
             self.prepare_transparent_transaction_batch(
@@ -1464,9 +1466,19 @@ impl DiskWriteBatch {
                 &spent_utxos_by_out_loc,
                 #[cfg(feature = "indexer")]
                 &out_loc_by_outpoint,
+                #[cfg(feature = "indexer")]
+                &mut explorer_context,
                 address_balances,
             );
         }
+
+        #[cfg(feature = "indexer")]
+        self.prepare_explorer_transaction_batch(
+            zakura_db,
+            network,
+            finalized,
+            &spent_utxos_by_outpoint,
+        );
 
         // Commit UTXOs and value pools
         self.prepare_chain_value_pools_batch(
@@ -1474,6 +1486,8 @@ impl DiskWriteBatch {
             finalized,
             spent_utxos_by_outpoint,
             value_pool,
+            #[cfg(feature = "indexer")]
+            explorer_context,
         )?;
 
         // The block has passed contextual validation, so update the metrics
