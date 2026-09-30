@@ -241,6 +241,9 @@ impl ZakuraDb {
 
         db.run_startup_format_change(format_change)?;
 
+        #[cfg(feature = "indexer")]
+        db.ensure_explorer_schema(read_only)?;
+
         Ok(db)
     }
 

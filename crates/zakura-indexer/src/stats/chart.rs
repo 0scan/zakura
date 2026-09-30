@@ -5,7 +5,10 @@ use zakura_chain::{
     block::Height,
     parameters::{Network, NetworkUpgrade},
 };
-use zakura_state::{ExplorerDailyStats, ReadRequest, ReadResponse, ReadState};
+use zakura_state::{
+    ExplorerDailyStats, ExplorerReadRequest, ExplorerReadResponse, ReadRequest, ReadResponse,
+    ReadState,
+};
 
 use super::date::{date_to_day, day_to_date};
 use crate::{
@@ -50,10 +53,10 @@ where
     }
 
     let response = read_state
-        .oneshot(ReadRequest::ExplorerDailyStats)
+        .oneshot(ReadRequest::Explorer(ExplorerReadRequest::DailyStats))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerDailyStats(rows) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::DailyStats(rows)) = response else {
         return Err(Error::StateResponse(
             "state returned the wrong response for explorer chart data".to_string(),
         ));

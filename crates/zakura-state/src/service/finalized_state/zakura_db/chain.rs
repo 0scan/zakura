@@ -288,14 +288,15 @@ impl DiskWriteBatch {
         &mut self,
         db: &ZakuraDb,
         finalized: &FinalizedBlock,
-        utxos_spent_by_block: &HashMap<transparent::OutPoint, transparent::Utxo>,
+        utxos_spent_by_block: HashMap<transparent::OutPoint, transparent::Utxo>,
         value_pool: ValueBalance<NonNegative>,
-    ) -> Result<(ValueBalance<NonNegative>, u32), ValidateContextError> {
+        #[cfg(feature = "indexer")] explorer_context: super::explorer::ExplorerBlockCommitContext,
+    ) -> Result<(), ValidateContextError> {
         let block_value_pool_change = finalized
             .block
             .chain_value_pool_change(
                 &db.network(),
-                utxos_spent_by_block,
+                &utxos_spent_by_block,
                 finalized.deferred_pool_balance_change,
             )
             .map_err(|value_balance_error| {
@@ -371,9 +372,18 @@ impl DiskWriteBatch {
             &BlockInfo::new(new_value_pool, block_size as u32),
         );
 
-        Ok((
-            new_value_pool,
+        #[cfg(feature = "indexer")]
+        self.prepare_explorer_analytics_batch(
+            db,
+            &db.network(),
+            finalized,
             u32::try_from(block_size).expect("verified block size fits in u32"),
-        ))
+            new_value_pool,
+            &utxos_spent_by_block,
+            value_pool.nsm_value_balance_amount().zatoshis(),
+            explorer_context.funded_transparent_address_count(),
+        );
+
+        Ok(())
     }
 }

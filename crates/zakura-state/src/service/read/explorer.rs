@@ -10,8 +10,10 @@ use zakura_chain::{transaction::Transaction, transparent};
 use crate::{
     explorer::{
         ExplorerAddressPage, ExplorerAddressRecord, ExplorerBlockSummary, ExplorerPageDirection,
-        ExplorerTransactionPage, ExplorerTransactionQuery, ExplorerTransactionSummary,
+        ExplorerReadRequest, ExplorerReadResponse, ExplorerTransactionPage,
+        ExplorerTransactionQuery, ExplorerTransactionSummary,
     },
+    request::Spend,
     service::{
         finalized_state::{explorer_transaction_record_with_ordered_utxos, ZakuraDb},
         non_finalized_state::Chain,
@@ -23,6 +25,72 @@ const EXPLORER_ROLLING_SCAN_LIMIT: u32 = 10_000;
 const ROLLING_WINDOW_SECONDS: i64 = 86_400;
 
 const MAX_EXPLORER_PAGE_SIZE: u32 = 100;
+
+/// Handles every explorer read behind the state service's single extension point.
+pub fn handle(
+    chain: Option<Arc<Chain>>,
+    db: &ZakuraDb,
+    request: ExplorerReadRequest,
+) -> Result<ExplorerReadResponse, crate::BoxError> {
+    Ok(match request {
+        ExplorerReadRequest::TransactionPage {
+            query,
+            limit,
+            cursor,
+            direction,
+        } => ExplorerReadResponse::TransactionPage(explorer_transaction_page(
+            chain, db, query, limit, cursor, direction,
+        )),
+        ExplorerReadRequest::TransparentOutputs(outpoints) => {
+            ExplorerReadResponse::TransparentOutputs(explorer_transparent_outputs(
+                chain, db, &outpoints,
+            ))
+        }
+        ExplorerReadRequest::TransparentOutputSpends(outpoints) => {
+            ExplorerReadResponse::TransparentOutputSpends(
+                outpoints
+                    .iter()
+                    .map(|outpoint| {
+                        super::spending_transaction_hash(
+                            chain.clone(),
+                            db,
+                            Spend::OutPoint(*outpoint),
+                        )
+                        .is_some()
+                    })
+                    .collect(),
+            )
+        }
+        ExplorerReadRequest::TransactionSummary(txid) => {
+            ExplorerReadResponse::TransactionSummary(explorer_transaction_summary(chain, db, txid))
+        }
+        ExplorerReadRequest::BlockSummaries(heights) => {
+            ExplorerReadResponse::BlockSummaries(explorer_block_summaries(chain, db, &heights))
+        }
+        ExplorerReadRequest::AddressPage {
+            address,
+            limit,
+            cursor,
+            direction,
+        } => ExplorerReadResponse::AddressPage(Box::new(explorer_address_page(
+            chain, db, address, limit, cursor, direction,
+        )?)),
+        ExplorerReadRequest::TransactionsByLocation(locations) => {
+            ExplorerReadResponse::TransactionsByLocation(explorer_transactions_by_location(
+                chain, db, &locations,
+            ))
+        }
+        ExplorerReadRequest::StatsSnapshot => {
+            ExplorerReadResponse::StatsSnapshot(explorer_stats_snapshot(db))
+        }
+        ExplorerReadRequest::DailyStats => {
+            ExplorerReadResponse::DailyStats(explorer_daily_stats(db))
+        }
+        ExplorerReadRequest::BalanceRankPage { limit, cursor } => {
+            ExplorerReadResponse::BalanceRankPage(explorer_balance_rank_page(db, limit, cursor))
+        }
+    })
+}
 
 /// Returns canonical block summaries for `heights`, preserving request order.
 pub fn explorer_block_summaries(

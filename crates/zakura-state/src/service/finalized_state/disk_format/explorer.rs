@@ -15,6 +15,33 @@ use crate::service::finalized_state::{
 };
 use crate::{ExplorerBlockStats, ExplorerChainStats, ExplorerDailyStats};
 
+/// Independently versioned explorer schema marker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ExplorerSchemaVersion(pub(crate) u32);
+
+impl ExplorerSchemaVersion {
+    pub(crate) const CURRENT: Self = Self(1);
+}
+
+impl IntoDisk for ExplorerSchemaVersion {
+    type Bytes = [u8; 4];
+
+    fn as_bytes(&self) -> Self::Bytes {
+        self.0.to_be_bytes()
+    }
+}
+
+impl FromDisk for ExplorerSchemaVersion {
+    fn from_bytes(bytes: impl AsRef<[u8]>) -> Self {
+        Self(u32::from_be_bytes(
+            bytes
+                .as_ref()
+                .try_into()
+                .expect("explorer schema versions are four bytes"),
+        ))
+    }
+}
+
 /// Balance-first key. Inverting the balance makes the RocksDB forward order richest first.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ExplorerBalanceKey([u8; 29]);

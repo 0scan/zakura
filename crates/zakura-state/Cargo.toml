@@ -25,7 +25,7 @@ progress-bar = [
     "howudoin",
 ]
 
-# Indexes spending transaction ids by spent outpoints and revealed nullifiers
+# Indexes spending transaction ids, explorer data, and canonical analytics.
 indexer = []
 
 # Emit fine-grained per-block commit-phase timing histograms (zakura.state.write.*),

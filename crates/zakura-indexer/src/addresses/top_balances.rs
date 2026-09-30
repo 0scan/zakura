@@ -1,7 +1,10 @@
 //! Transparent balance ranking adapter backed by canonical state.
 
 use tower::ServiceExt;
-use zakura_state::{ExplorerBalanceRankCursor, ReadRequest, ReadResponse, ReadState};
+use zakura_state::{
+    ExplorerBalanceRankCursor, ExplorerReadRequest, ExplorerReadResponse, ReadRequest,
+    ReadResponse, ReadState,
+};
 
 use crate::{
     types::{
@@ -42,13 +45,15 @@ where
         block_hash: cursor.indexed_block_hash,
     });
     let response = read_state
-        .oneshot(ReadRequest::ExplorerBalanceRankPage {
-            limit,
-            cursor: state_cursor,
-        })
+        .oneshot(ReadRequest::Explorer(
+            ExplorerReadRequest::BalanceRankPage {
+                limit,
+                cursor: state_cursor,
+            },
+        ))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerBalanceRankPage(page) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::BalanceRankPage(page)) = response else {
         return Err(Error::StateResponse(
             "state returned the wrong response for top balances".to_string(),
         ));

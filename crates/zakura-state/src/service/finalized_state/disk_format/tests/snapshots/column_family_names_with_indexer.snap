@@ -13,6 +13,7 @@ expression: cf_names
   "explorer_block_stats",
   "explorer_chain_stats",
   "explorer_daily_stats",
+  "explorer_schema",
   "explorer_shielded_tx_by_class_loc",
   "explorer_tx_by_kind_loc",
   "explorer_tx_meta_by_loc",

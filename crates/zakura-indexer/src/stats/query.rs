@@ -1,7 +1,9 @@
 //! Explorer statistics adapters backed by canonical state.
 
 use tower::ServiceExt;
-use zakura_state::{ReadRequest, ReadResponse, ReadState};
+use zakura_state::{
+    ExplorerReadRequest, ExplorerReadResponse, ReadRequest, ReadResponse, ReadState,
+};
 
 use crate::{
     types::{ChainTotals, IndexerStats, RollingDayStats},
@@ -14,10 +16,10 @@ where
     State: ReadState,
 {
     let response = read_state
-        .oneshot(ReadRequest::ExplorerStatsSnapshot)
+        .oneshot(ReadRequest::Explorer(ExplorerReadRequest::StatsSnapshot))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerStatsSnapshot(snapshot) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::StatsSnapshot(snapshot)) = response else {
         return Err(Error::StateResponse(
             "state returned the wrong response for explorer statistics".to_string(),
         ));

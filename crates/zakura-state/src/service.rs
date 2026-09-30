@@ -2977,102 +2977,11 @@ impl Service<ReadRequest> for ReadStateService {
             )),
 
             #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransactionPage {
-                query,
-                limit,
-                cursor,
-                direction,
-            } => Ok(ReadResponse::ExplorerTransactionPage(
-                read::explorer_transaction_page(
-                    state.latest_best_chain(),
-                    &state.db,
-                    query,
-                    limit,
-                    cursor,
-                    direction,
-                ),
-            )),
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransparentOutputs(outpoints) => Ok(
-                ReadResponse::ExplorerTransparentOutputs(read::explorer_transparent_outputs(
-                    state.latest_best_chain(),
-                    &state.db,
-                    &outpoints,
-                )),
-            ),
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransparentOutputSpends(outpoints) => {
-                let chain = state.latest_best_chain();
-                Ok(ReadResponse::ExplorerTransparentOutputSpends(
-                    outpoints
-                        .iter()
-                        .map(|outpoint| {
-                            read::unspent_utxo(chain.clone(), &state.db, *outpoint).is_none()
-                        })
-                        .collect(),
-                ))
-            }
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransactionSummary(txid) => {
-                Ok(ReadResponse::ExplorerTransactionSummary(
-                    read::explorer_transaction_summary(state.latest_best_chain(), &state.db, txid),
-                ))
-            }
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerBlockSummaries(heights) => {
-                Ok(ReadResponse::ExplorerBlockSummaries(
-                    read::explorer_block_summaries(state.latest_best_chain(), &state.db, &heights),
-                ))
-            }
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerAddressPage {
-                address,
-                limit,
-                cursor,
-                direction,
-            } => Ok(ReadResponse::ExplorerAddressPage(Box::new(
-                read::explorer_address_page(
-                    state.latest_best_chain(),
-                    &state.db,
-                    address,
-                    limit,
-                    cursor,
-                    direction,
-                )?,
-            ))),
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransactionsByLocation(locations) => {
-                Ok(ReadResponse::ExplorerTransactionsByLocation(
-                    read::explorer_transactions_by_location(
-                        state.latest_best_chain(),
-                        &state.db,
-                        &locations,
-                    ),
-                ))
-            }
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerStatsSnapshot => Ok(ReadResponse::ExplorerStatsSnapshot(
-                read::explorer_stats_snapshot(&state.db),
-            )),
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerDailyStats => Ok(ReadResponse::ExplorerDailyStats(
-                read::explorer_daily_stats(&state.db),
-            )),
-
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerBalanceRankPage { limit, cursor } => {
-                Ok(ReadResponse::ExplorerBalanceRankPage(
-                    read::explorer_balance_rank_page(&state.db, limit, cursor),
-                ))
-            }
+            ReadRequest::Explorer(request) => Ok(ReadResponse::Explorer(read::explorer::handle(
+                state.latest_best_chain(),
+                &state.db,
+                request,
+            )?)),
 
             ReadRequest::AnyChainTransaction(hash) => {
                 Ok(ReadResponse::AnyChainTransaction(read::any_transaction(

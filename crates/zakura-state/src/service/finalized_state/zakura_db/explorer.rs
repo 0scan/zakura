@@ -25,9 +25,9 @@ use crate::{
     service::finalized_state::{
         disk_format::explorer::{
             ExplorerAddressKey, ExplorerAddressRecord, ExplorerAmountBucket, ExplorerBalanceKey,
-            ExplorerDayKey, ExplorerShieldedClassLocation, ExplorerShieldedFlow,
-            ExplorerShieldedPool, ExplorerTransactionKind, ExplorerTransactionKindLocation,
-            ExplorerTransactionRecord,
+            ExplorerDayKey, ExplorerSchemaVersion, ExplorerShieldedClassLocation,
+            ExplorerShieldedFlow, ExplorerShieldedPool, ExplorerTransactionKind,
+            ExplorerTransactionKindLocation, ExplorerTransactionRecord,
         },
         DiskWriteBatch, TransactionLocation, TypedColumnFamily,
     },
@@ -38,8 +38,36 @@ use super::ZakuraDb;
 pub(crate) type PendingExplorerAddressRecords =
     HashMap<zakura_chain::transparent::Address, Option<ExplorerAddressRecord>>;
 
+/// Explorer facts carried between the existing transparent and chain commit phases.
+///
+/// Keeping this feature-only context in the explorer module lets the core write methods retain
+/// their original return values while still reusing facts they have already calculated.
+pub struct ExplorerBlockCommitContext {
+    funded_transparent_address_count: u64,
+}
+
+impl ExplorerBlockCommitContext {
+    pub(crate) fn new(db: &ZakuraDb) -> Self {
+        Self {
+            funded_transparent_address_count: db
+                .explorer_chain_stats()
+                .funded_transparent_address_count,
+        }
+    }
+
+    pub(crate) fn set_funded_transparent_address_count(&mut self, count: u64) {
+        self.funded_transparent_address_count = count;
+    }
+
+    pub(crate) fn funded_transparent_address_count(&self) -> u64 {
+        self.funded_transparent_address_count
+    }
+}
+
 /// Fixed-width metadata keyed once per finalized transaction.
 pub const EXPLORER_TRANSACTION_META_BY_LOC: &str = "explorer_tx_meta_by_loc";
+/// Explorer-owned schema marker, independent from the canonical state format version.
+pub const EXPLORER_SCHEMA: &str = "explorer_schema";
 /// One chain-ordered key per finalized transaction, partitioned by kind.
 pub const EXPLORER_TRANSACTION_BY_KIND_LOC: &str = "explorer_tx_by_kind_loc";
 /// One exact flow/pool/amount-bucket key per finalized shielded transaction.
@@ -57,6 +85,7 @@ pub const EXPLORER_BALANCE_ORDER: &str = "explorer_balance_order";
 
 type ExplorerTransactionMetaCf<'cf> =
     TypedColumnFamily<'cf, TransactionLocation, ExplorerTransactionRecord>;
+type ExplorerSchemaCf<'cf> = TypedColumnFamily<'cf, (), ExplorerSchemaVersion>;
 type ExplorerTransactionKindCf<'cf> = TypedColumnFamily<'cf, ExplorerTransactionKindLocation, ()>;
 type ExplorerShieldedClassCf<'cf> = TypedColumnFamily<'cf, ExplorerShieldedClassLocation, ()>;
 type ExplorerAddressMetaCf<'cf> = TypedColumnFamily<'cf, ExplorerAddressKey, ExplorerAddressRecord>;
@@ -67,6 +96,50 @@ type ExplorerDailyStatsCf<'cf> = TypedColumnFamily<'cf, ExplorerDayKey, crate::E
 type ExplorerBalanceOrderCf<'cf> = TypedColumnFamily<'cf, ExplorerBalanceKey, ()>;
 
 impl ZakuraDb {
+    fn explorer_schema_cf(&self) -> ExplorerSchemaCf<'_> {
+        ExplorerSchemaCf::new(&self.db, EXPLORER_SCHEMA)
+            .expect("explorer schema column family is registered")
+    }
+
+    /// Validates an existing explorer schema or initializes a new empty database.
+    pub(crate) fn ensure_explorer_schema(
+        &self,
+        read_only: bool,
+    ) -> Result<(), crate::StateInitError> {
+        match self.explorer_schema_cf().zs_get(&()) {
+            Some(version) if version == ExplorerSchemaVersion::CURRENT => Ok(()),
+            Some(version) => Err(crate::StateInitError::ExplorerSchema {
+                path: self.path().to_owned(),
+                reason: format!(
+                    "found schema version {}, but this build requires {}",
+                    version.0,
+                    ExplorerSchemaVersion::CURRENT.0
+                ),
+            }),
+            None if self.tip().is_some() => Err(crate::StateInitError::ExplorerSchema {
+                path: self.path().to_owned(),
+                reason: "canonical state already contains blocks but has no explorer indexes; use a fresh state database and resync"
+                    .to_string(),
+            }),
+            None if read_only => Err(crate::StateInitError::ExplorerSchema {
+                path: self.path().to_owned(),
+                reason: "the read-only primary database has no explorer schema marker".to_string(),
+            }),
+            None => {
+                let mut batch = DiskWriteBatch::new();
+                let _ = self
+                    .explorer_schema_cf()
+                    .with_batch_for_writing(&mut batch)
+                    .zs_insert(&(), &ExplorerSchemaVersion::CURRENT);
+                self.write_batch(batch)
+                    .map_err(|error| crate::StateInitError::ExplorerSchema {
+                        path: self.path().to_owned(),
+                        reason: format!("could not initialize the explorer schema: {error}"),
+                    })
+            }
+        }
+    }
+
     fn explorer_transaction_meta_cf(&self) -> ExplorerTransactionMetaCf<'_> {
         ExplorerTransactionMetaCf::new(&self.db, EXPLORER_TRANSACTION_META_BY_LOC)
             .expect("explorer transaction metadata column family is registered")
@@ -1078,6 +1151,46 @@ mod tests {
             ExplorerAmountBucket::from_amount(Some(100_000_000_000)),
             ExplorerAmountBucket::AtLeastOneHundredBillion
         );
+    }
+
+    #[test]
+    fn explorer_schema_version_is_initialized_and_validated() {
+        let db = ZakuraDb::new(
+            &Config::ephemeral(),
+            STATE_DATABASE_KIND,
+            &state_database_format_version_in_code(),
+            &Network::Mainnet,
+            true,
+            STATE_COLUMN_FAMILIES_IN_CODE
+                .iter()
+                .map(ToString::to_string),
+            false,
+        )
+        .expect("opening an ephemeral database should succeed");
+
+        assert_eq!(
+            db.explorer_schema_cf().zs_get(&()),
+            Some(ExplorerSchemaVersion::CURRENT)
+        );
+
+        let mut batch = DiskWriteBatch::new();
+        let _ = db
+            .explorer_schema_cf()
+            .with_batch_for_writing(&mut batch)
+            .zs_insert(
+                &(),
+                &ExplorerSchemaVersion(ExplorerSchemaVersion::CURRENT.0 + 1),
+            );
+        db.write_batch(batch)
+            .expect("writing an unsupported test schema should succeed");
+
+        let error = db
+            .ensure_explorer_schema(false)
+            .expect_err("an unsupported explorer schema must be rejected");
+        assert!(matches!(
+            error,
+            crate::StateInitError::ExplorerSchema { .. }
+        ));
     }
 
     #[test]

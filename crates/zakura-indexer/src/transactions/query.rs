@@ -3,9 +3,9 @@
 use tower::ServiceExt;
 use zakura_chain::{block::Hash, transaction::Hash as TransactionHash};
 use zakura_state::{
-    ExplorerAmountFilter, ExplorerPageDirection, ExplorerShieldedFlowFilter,
-    ExplorerShieldedPoolFilter, ExplorerTransactionKindFilter, ExplorerTransactionQuery,
-    ReadRequest, ReadResponse, ReadState, TransactionLocation,
+    ExplorerAmountFilter, ExplorerPageDirection, ExplorerReadRequest, ExplorerReadResponse,
+    ExplorerShieldedFlowFilter, ExplorerShieldedPoolFilter, ExplorerTransactionKindFilter,
+    ExplorerTransactionQuery, ReadRequest, ReadResponse, ReadState, TransactionLocation,
 };
 
 use crate::{
@@ -79,20 +79,22 @@ where
         PageDirection::Previous => ExplorerPageDirection::Newer,
     };
     let response = read_state
-        .oneshot(ReadRequest::ExplorerTransactionPage {
-            query: state_query,
-            limit,
-            cursor: cursor.map(|cursor| {
-                TransactionLocation::from_u64(
-                    cursor.position.height,
-                    u64::from(cursor.position.transaction_index),
-                )
-            }),
-            direction: state_direction,
-        })
+        .oneshot(ReadRequest::Explorer(
+            ExplorerReadRequest::TransactionPage {
+                query: state_query,
+                limit,
+                cursor: cursor.map(|cursor| {
+                    TransactionLocation::from_u64(
+                        cursor.position.height,
+                        u64::from(cursor.position.transaction_index),
+                    )
+                }),
+                direction: state_direction,
+            },
+        ))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerTransactionPage(page) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::TransactionPage(page)) = response else {
         return Err(Error::StateResponse(
             "state returned the wrong response for an explorer transaction request".to_string(),
         ));

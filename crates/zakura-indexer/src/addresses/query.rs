@@ -7,8 +7,8 @@ use zakura_chain::{
     block::Hash, parameters::Network, transaction::Transaction, transparent::Address,
 };
 use zakura_state::{
-    ExplorerPageDirection, ExplorerTransactionSummary, ReadRequest, ReadResponse, ReadState,
-    TransactionLocation,
+    ExplorerPageDirection, ExplorerReadRequest, ExplorerReadResponse, ExplorerTransactionSummary,
+    ReadRequest, ReadResponse, ReadState, TransactionLocation,
 };
 
 use crate::{
@@ -247,15 +247,15 @@ where
     State: ReadState,
 {
     let response = read_state
-        .oneshot(ReadRequest::ExplorerAddressPage {
+        .oneshot(ReadRequest::Explorer(ExplorerReadRequest::AddressPage {
             address,
             limit,
             cursor,
             direction,
-        })
+        }))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerAddressPage(page) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::AddressPage(page)) = response else {
         return Err(Error::StateResponse(
             "state returned the wrong response for an explorer address request".to_string(),
         ));
@@ -277,12 +277,14 @@ where
         .collect::<Vec<_>>();
     let response = read_state
         .clone()
-        .oneshot(ReadRequest::ExplorerTransactionsByLocation(
-            locations.into(),
+        .oneshot(ReadRequest::Explorer(
+            ExplorerReadRequest::TransactionsByLocation(locations.into()),
         ))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerTransactionsByLocation(transactions) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::TransactionsByLocation(transactions)) =
+        response
+    else {
         return Err(Error::StateResponse(
             "state returned the wrong response for explorer transactions".to_string(),
         ));
@@ -303,12 +305,12 @@ where
         .filter_map(|input| input.outpoint())
         .collect::<Vec<_>>();
     let response = read_state
-        .oneshot(ReadRequest::ExplorerTransparentOutputs(
-            outpoints.clone().into(),
+        .oneshot(ReadRequest::Explorer(
+            ExplorerReadRequest::TransparentOutputs(outpoints.clone().into()),
         ))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerTransparentOutputs(outputs) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputs(outputs)) = response else {
         return Err(Error::StateResponse(
             "state returned the wrong response for transparent outputs".to_string(),
         ));

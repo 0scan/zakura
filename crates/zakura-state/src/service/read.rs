@@ -43,13 +43,6 @@ pub use block::spending_transaction_hash;
 
 pub use chain_tips::{chain_tips, ChainTipInfo, ChainTipStatus, SelectedHeaders};
 
-#[cfg(feature = "indexer")]
-pub use explorer::{
-    explorer_address_page, explorer_balance_rank_page, explorer_block_summaries,
-    explorer_daily_stats, explorer_stats_snapshot, explorer_transaction_page,
-    explorer_transaction_summary, explorer_transactions_by_location, explorer_transparent_outputs,
-};
-
 pub use find::{
     best_tip, block_locator, depth, finalized_state_contains_block_hash, find_chain_hashes,
     find_chain_headers, hash_by_height, height_by_hash, next_median_time_past,

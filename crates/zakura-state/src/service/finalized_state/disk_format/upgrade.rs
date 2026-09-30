@@ -112,7 +112,7 @@ fn format_upgrades(
     let min_version = move || min_version.clone().unwrap_or(Version::new(0, 0, 0));
 
     // Note: Disk format upgrades must be run in order of database version.
-    let upgrades: Vec<Box<dyn DiskFormatUpgrade>> = vec![
+    ([
         Box::new(block_info_and_address_received::Upgrade),
         Box::new(no_migration::NoMigration::new(
             "add pruning metadata column family",
@@ -150,18 +150,7 @@ fn format_upgrades(
             "add Zakura header auxiliary body size corrections",
             Version::new(29, 1, 0),
         )),
-    ];
-    #[cfg(feature = "indexer")]
-    let upgrades = {
-        let mut upgrades = upgrades;
-        upgrades.push(Box::new(no_migration::NoMigration::new_non_reusable_major(
-            "store explorer indexes and analytics in canonical state",
-            Version::new(30, 0, 0),
-        )));
-        upgrades
-    };
-
-    upgrades
+    ] as [Box<dyn DiskFormatUpgrade>; 12])
         .into_iter()
         .filter(move |upgrade| upgrade.version() > min_version())
 }
@@ -1129,10 +1118,7 @@ fn vct_format_changes_include_root_auth_metadata_updates() {
 
     let upgrades: Vec<_> = format_upgrades(Some(Version::new(27, 3, 0))).collect();
 
-    #[cfg(not(feature = "indexer"))]
     assert_eq!(upgrades.len(), 8);
-    #[cfg(feature = "indexer")]
-    assert_eq!(upgrades.len(), 9);
     assert_eq!(upgrades[0].version(), Version::new(28, 0, 0));
     assert_eq!(upgrades[1].version(), Version::new(28, 0, 1));
     assert_eq!(upgrades[2].version(), Version::new(28, 0, 2));
@@ -1149,14 +1135,6 @@ fn vct_format_changes_include_root_auth_metadata_updates() {
         !upgrades[7].needs_migration(),
         "the sparse body size correction column family is created on open"
     );
-    #[cfg(feature = "indexer")]
-    {
-        assert_eq!(upgrades[8].version(), Version::new(30, 0, 0));
-        assert!(
-            !upgrades[8].is_reusable_major_upgrade(),
-            "explorer state must start in a fresh major-version database"
-        );
-    }
     let mut current_schema_version = state_database_format_version_in_code();
     current_schema_version.build = semver::BuildMetadata::EMPTY;
     assert_eq!(

@@ -1454,12 +1454,10 @@ impl DiskWriteBatch {
         // for the genesis block. This also ignores genesis shielded value pool updates, but there
         // aren't any of those on mainnet or testnet.
         #[cfg(feature = "indexer")]
-        let mut funded_transparent_address_count = zakura_db
-            .explorer_chain_stats()
-            .funded_transparent_address_count;
+        let mut explorer_context = super::explorer::ExplorerBlockCommitContext::new(zakura_db);
         if !finalized.height.is_min() {
             // Commit transaction indexes
-            let funded_address_count = self.prepare_transparent_transaction_batch(
+            self.prepare_transparent_transaction_batch(
                 zakura_db,
                 network,
                 finalized,
@@ -1468,14 +1466,10 @@ impl DiskWriteBatch {
                 &spent_utxos_by_out_loc,
                 #[cfg(feature = "indexer")]
                 &out_loc_by_outpoint,
+                #[cfg(feature = "indexer")]
+                &mut explorer_context,
                 address_balances,
             );
-            #[cfg(feature = "indexer")]
-            {
-                funded_transparent_address_count = funded_address_count;
-            }
-            #[cfg(not(feature = "indexer"))]
-            let _ = funded_address_count;
         }
 
         #[cfg(feature = "indexer")]
@@ -1487,26 +1481,14 @@ impl DiskWriteBatch {
         );
 
         // Commit UTXOs and value pools
-        let (new_value_pools, serialized_size) = self.prepare_chain_value_pools_batch(
+        self.prepare_chain_value_pools_batch(
             zakura_db,
             finalized,
-            &spent_utxos_by_outpoint,
+            spent_utxos_by_outpoint,
             value_pool,
+            #[cfg(feature = "indexer")]
+            explorer_context,
         )?;
-        #[cfg(not(feature = "indexer"))]
-        let _ = (new_value_pools, serialized_size);
-
-        #[cfg(feature = "indexer")]
-        self.prepare_explorer_analytics_batch(
-            zakura_db,
-            network,
-            finalized,
-            serialized_size,
-            new_value_pools,
-            &spent_utxos_by_outpoint,
-            value_pool.nsm_value_balance_amount().zatoshis(),
-            funded_transparent_address_count,
-        );
 
         // The block has passed contextual validation, so update the metrics
         block_precommit_metrics(&finalized.block, finalized.hash, finalized.height);

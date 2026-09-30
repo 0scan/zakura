@@ -96,6 +96,97 @@ pub struct ExplorerTransactionQuery {
     pub amount: ExplorerAmountFilter,
 }
 
+/// Explorer-only reads routed through the state service's single extension point.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExplorerReadRequest {
+    /// Returns one canonical transaction page.
+    TransactionPage {
+        /// Transaction filters represented by compact state indexes.
+        query: ExplorerTransactionQuery,
+        /// Requested page size. The state service clamps it to its supported maximum.
+        limit: u32,
+        /// Exclusive transaction location at which traversal starts.
+        cursor: Option<TransactionLocation>,
+        /// Cursor traversal direction.
+        direction: ExplorerPageDirection,
+    },
+    /// Resolves transparent outputs, including already-spent historical outputs.
+    TransparentOutputs(Arc<[transparent::OutPoint]>),
+    /// Returns spent status for transparent outputs, preserving request order.
+    TransparentOutputSpends(Arc<[transparent::OutPoint]>),
+    /// Looks up compact canonical explorer metadata for one transaction hash.
+    TransactionSummary(transaction::Hash),
+    /// Loads canonical block bodies and compact explorer aggregates in height order.
+    BlockSummaries(Arc<[block::Height]>),
+    /// Returns canonical transparent-address state and one transaction page.
+    AddressPage {
+        /// Transparent address whose activity is requested.
+        address: transparent::Address,
+        /// Requested page size. The state service clamps it to its supported maximum.
+        limit: u32,
+        /// Exclusive transaction location at which traversal starts.
+        cursor: Option<TransactionLocation>,
+        /// Cursor traversal direction.
+        direction: ExplorerPageDirection,
+    },
+    /// Loads canonical transactions by their chain locations, preserving request order.
+    TransactionsByLocation(Arc<[TransactionLocation]>),
+    /// Returns finalized canonical explorer totals and trailing activity.
+    StatsSnapshot,
+    /// Returns finalized daily explorer analytics in chronological order.
+    DailyStats,
+    /// Returns one finalized transparent-address balance ranking page.
+    BalanceRankPage {
+        /// Requested page size, clamped by state.
+        limit: u32,
+        /// Exclusive stable ranking cursor.
+        cursor: Option<ExplorerBalanceRankCursor>,
+    },
+}
+
+impl ExplorerReadRequest {
+    /// Returns a stable diagnostic name for this explorer request.
+    pub(crate) fn variant_name(&self) -> &'static str {
+        match self {
+            Self::TransactionPage { .. } => "explorer_transaction_page",
+            Self::TransparentOutputs(_) => "explorer_transparent_outputs",
+            Self::TransparentOutputSpends(_) => "explorer_transparent_output_spends",
+            Self::TransactionSummary(_) => "explorer_transaction_summary",
+            Self::BlockSummaries(_) => "explorer_block_summaries",
+            Self::AddressPage { .. } => "explorer_address_page",
+            Self::TransactionsByLocation(_) => "explorer_transactions_by_location",
+            Self::StatsSnapshot => "explorer_stats_snapshot",
+            Self::DailyStats => "explorer_daily_stats",
+            Self::BalanceRankPage { .. } => "explorer_balance_rank_page",
+        }
+    }
+}
+
+/// Responses returned through [`ExplorerReadRequest`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExplorerReadResponse {
+    /// Canonical transaction page.
+    TransactionPage(ExplorerTransactionPage),
+    /// Historical transparent outputs, parallel to the requested outpoints.
+    TransparentOutputs(Vec<Option<transparent::Utxo>>),
+    /// Spent flags, parallel to the requested outpoints.
+    TransparentOutputSpends(Vec<bool>),
+    /// Compact metadata for one canonical transaction.
+    TransactionSummary(Option<ExplorerTransactionSummary>),
+    /// Canonical block summaries, parallel to the requested heights.
+    BlockSummaries(Vec<Option<ExplorerBlockSummary>>),
+    /// Canonical transparent-address state and transactions.
+    AddressPage(Box<ExplorerAddressPage>),
+    /// Canonical transactions, parallel to the requested locations.
+    TransactionsByLocation(Vec<Option<Arc<transaction::Transaction>>>),
+    /// Canonical totals and trailing activity.
+    StatsSnapshot(ExplorerStatsSnapshot),
+    /// Canonical daily analytics in chronological order.
+    DailyStats(Vec<ExplorerDailyStats>),
+    /// Transparent-address balance ranking page.
+    BalanceRankPage(ExplorerBalanceRankPage),
+}
+
 impl ExplorerTransactionQuery {
     /// Returns whether selectors requiring shielded metadata are internally valid.
     pub fn is_valid(self) -> bool {

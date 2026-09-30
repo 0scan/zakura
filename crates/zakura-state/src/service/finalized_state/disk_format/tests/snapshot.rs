@@ -158,5 +158,8 @@ fn snapshot_raw_rocksdb_column_family_data(db: &DiskDb, original_cf_names: &[Str
 }
 
 fn skip_raw_data_snapshot(cf_name: &str) -> bool {
-    matches!(cf_name, COMMITMENT_ROOTS_BY_HEIGHT | VCT_UPGRADE_METADATA)
+    matches!(
+        cf_name,
+        COMMITMENT_ROOTS_BY_HEIGHT | "explorer_schema" | VCT_UPGRADE_METADATA
+    )
 }

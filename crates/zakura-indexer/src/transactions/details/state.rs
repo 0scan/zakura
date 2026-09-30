@@ -9,7 +9,9 @@ use zakura_chain::{
     transaction::{Hash as TransactionHash, Transaction},
     transparent::{OutPoint, Utxo},
 };
-use zakura_state::{MinedTx, ReadRequest, ReadResponse, ReadState};
+use zakura_state::{
+    ExplorerReadRequest, ExplorerReadResponse, MinedTx, ReadRequest, ReadResponse, ReadState,
+};
 
 use crate::Error;
 
@@ -38,8 +40,12 @@ pub(super) async fn transaction_summary<State>(
 where
     State: ReadState,
 {
-    let response = call(read_state, ReadRequest::ExplorerTransactionSummary(txid)).await?;
-    let ReadResponse::ExplorerTransactionSummary(summary) = response else {
+    let response = call(
+        read_state,
+        ReadRequest::Explorer(ExplorerReadRequest::TransactionSummary(txid)),
+    )
+    .await?;
+    let ReadResponse::Explorer(ExplorerReadResponse::TransactionSummary(summary)) = response else {
         return Err(unexpected_response("ExplorerTransactionSummary"));
     };
     Ok(summary)
@@ -90,10 +96,13 @@ where
 
     let response = call(
         read_state,
-        ReadRequest::ExplorerTransparentOutputSpends(outpoints.clone().into()),
+        ReadRequest::Explorer(ExplorerReadRequest::TransparentOutputSpends(
+            outpoints.clone().into(),
+        )),
     )
     .await?;
-    let ReadResponse::ExplorerTransparentOutputSpends(spent) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputSpends(spent)) = response
+    else {
         return Err(unexpected_response("ExplorerTransparentOutputSpends"));
     };
     Ok(outpoints.into_iter().zip(spent).collect())
@@ -113,10 +122,12 @@ where
         .collect::<Vec<_>>();
     let response = call(
         read_state,
-        ReadRequest::ExplorerTransparentOutputs(outpoints.clone().into()),
+        ReadRequest::Explorer(ExplorerReadRequest::TransparentOutputs(
+            outpoints.clone().into(),
+        )),
     )
     .await?;
-    let ReadResponse::ExplorerTransparentOutputs(outputs) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputs(outputs)) = response else {
         return Err(unexpected_response("ExplorerTransparentOutputs"));
     };
     outpoints

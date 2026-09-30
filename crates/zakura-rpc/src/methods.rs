@@ -285,7 +285,7 @@ pub(super) const PARAM_POOL_DESC: &str = "The pool from which subtrees should be
 Either \"sapling\", \"orchard\", or \"ironwood\".";
 pub(super) const PARAM_START_INDEX_DESC: &str =
     "The index of the first 2^16-leaf subtree to return.";
-pub(super) const PARAM_LIMIT_DESC: &str = "The maximum number of records to return.";
+pub(super) const PARAM_LIMIT_DESC: &str = "The maximum number of subtrees to return.";
 pub(super) const PARAM_REQUEST_DESC: &str = "The request object containing the parameters.";
 pub(super) const PARAM_INDEX_DESC: &str = "The index of the subtree to return.";
 pub(super) const PARAM_RAW_TRANSACTION_HEX_DESC: &str = "The hex-encoded raw transaction bytes.";

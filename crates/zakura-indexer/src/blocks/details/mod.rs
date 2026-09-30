@@ -5,7 +5,9 @@ mod state;
 mod value_pools;
 
 use zakura_chain::parameters::Network;
-use zakura_state::{HashOrHeight, ReadRequest, ReadResponse, ReadState};
+use zakura_state::{
+    ExplorerReadRequest, ExplorerReadResponse, HashOrHeight, ReadRequest, ReadResponse, ReadState,
+};
 
 use crate::{
     blocks::query::block_record_from_state, transactions::build_block_transactions,
@@ -34,10 +36,11 @@ where
     };
     let response = state::call(
         read_state.clone(),
-        ReadRequest::ExplorerBlockSummaries(vec![height].into()),
+        ReadRequest::Explorer(ExplorerReadRequest::BlockSummaries(vec![height].into())),
     )
     .await?;
-    let ReadResponse::ExplorerBlockSummaries(mut summaries) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::BlockSummaries(mut summaries)) = response
+    else {
         return Err(state::unexpected_response("ExplorerBlockSummaries"));
     };
     let Some(summary_data) = summaries.pop().flatten() else {
@@ -105,7 +108,9 @@ mod tests {
         parameters::{testnet::RegtestParameters, Network},
         serialization::ZcashSerialize,
     };
-    use zakura_state::{ExplorerBlockSummary, ReadRequest, ReadResponse};
+    use zakura_state::{
+        ExplorerBlockSummary, ExplorerReadRequest, ExplorerReadResponse, ReadRequest, ReadResponse,
+    };
 
     #[tokio::test]
     async fn assembles_rpc_and_explorer_fields_without_an_rpc_call() {
@@ -121,18 +126,20 @@ mod tests {
                     ReadRequest::BlockAndSize(_) => {
                         ReadResponse::BlockAndSize(Some((block.clone(), serialized_size)))
                     }
-                    ReadRequest::ExplorerBlockSummaries(heights) => {
+                    ReadRequest::Explorer(ExplorerReadRequest::BlockSummaries(heights)) => {
                         assert_eq!(&*heights, &[Height(0)]);
-                        ReadResponse::ExplorerBlockSummaries(vec![Some(ExplorerBlockSummary {
-                            block: block.clone(),
-                            serialized_size: u32::try_from(serialized_size)
-                                .expect("test block size fits in u32"),
-                            total_fees_zat: 0,
-                        })])
+                        ReadResponse::Explorer(ExplorerReadResponse::BlockSummaries(vec![Some(
+                            ExplorerBlockSummary {
+                                block: block.clone(),
+                                serialized_size: u32::try_from(serialized_size)
+                                    .expect("test block size fits in u32"),
+                                total_fees_zat: 0,
+                            },
+                        )]))
                     }
-                    ReadRequest::ExplorerTransparentOutputs(outpoints) => {
+                    ReadRequest::Explorer(ExplorerReadRequest::TransparentOutputs(outpoints)) => {
                         assert!(outpoints.is_empty());
-                        ReadResponse::ExplorerTransparentOutputs(Vec::new())
+                        ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputs(Vec::new()))
                     }
                     ReadRequest::BlockHeader(_) => ReadResponse::BlockHeader {
                         header: block.header.clone(),
@@ -153,9 +160,11 @@ mod tests {
                     ReadRequest::BlockInfo(_) => {
                         ReadResponse::BlockInfo(Some(BlockInfo::default()))
                     }
-                    ReadRequest::ExplorerTransparentOutputSpends(outpoints) => {
-                        ReadResponse::ExplorerTransparentOutputSpends(vec![false; outpoints.len()])
-                    }
+                    ReadRequest::Explorer(ExplorerReadRequest::TransparentOutputSpends(
+                        outpoints,
+                    )) => ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputSpends(
+                        vec![false; outpoints.len()],
+                    )),
                     _ => panic!("unexpected test state request"),
                 })
             }

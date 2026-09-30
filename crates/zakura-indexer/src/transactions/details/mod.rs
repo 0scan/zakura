@@ -76,8 +76,8 @@ mod tests {
         serialization::ZcashSerialize,
     };
     use zakura_state::{
-        ExplorerTransactionRecord, ExplorerTransactionSummary, MinedTx, ReadRequest, ReadResponse,
-        TransactionLocation,
+        ExplorerReadRequest, ExplorerReadResponse, ExplorerTransactionRecord,
+        ExplorerTransactionSummary, MinedTx, ReadRequest, ReadResponse, TransactionLocation,
     };
 
     use crate::types::{TransactionKind, TransactionStatus};
@@ -111,33 +111,37 @@ mod tests {
                             block_time,
                         )))
                     }
-                    ReadRequest::ExplorerTransactionSummary(requested_txid) => {
+                    ReadRequest::Explorer(ExplorerReadRequest::TransactionSummary(
+                        requested_txid,
+                    )) => {
                         assert_eq!(requested_txid, txid);
-                        ReadResponse::ExplorerTransactionSummary(Some(ExplorerTransactionSummary {
-                            location: TransactionLocation::from_usize(Height(0), 0),
-                            txid,
-                            block_hash,
-                            block_time: block_time.timestamp(),
-                            record: ExplorerTransactionRecord {
-                                serialized_size: transaction_size,
-                                fee_zat: 0,
-                                transparent_value_balance_zat: 0,
-                                sapling_value_balance_zat: 0,
-                                orchard_value_balance_zat: 0,
-                                ironwood_value_balance_zat: 0,
-                                transparent_input_count: 0,
-                                transparent_output_count: 1,
-                                joinsplit_count: 0,
-                                sapling_spend_count: 0,
-                                sapling_output_count: 0,
-                                orchard_action_count: 0,
-                                ironwood_action_count: 0,
+                        ReadResponse::Explorer(ExplorerReadResponse::TransactionSummary(Some(
+                            ExplorerTransactionSummary {
+                                location: TransactionLocation::from_usize(Height(0), 0),
+                                txid,
+                                block_hash,
+                                block_time: block_time.timestamp(),
+                                record: ExplorerTransactionRecord {
+                                    serialized_size: transaction_size,
+                                    fee_zat: 0,
+                                    transparent_value_balance_zat: 0,
+                                    sapling_value_balance_zat: 0,
+                                    orchard_value_balance_zat: 0,
+                                    ironwood_value_balance_zat: 0,
+                                    transparent_input_count: 0,
+                                    transparent_output_count: 1,
+                                    joinsplit_count: 0,
+                                    sapling_spend_count: 0,
+                                    sapling_output_count: 0,
+                                    orchard_action_count: 0,
+                                    ironwood_action_count: 0,
+                                },
                             },
-                        }))
+                        )))
                     }
-                    ReadRequest::ExplorerTransparentOutputs(outpoints) => {
+                    ReadRequest::Explorer(ExplorerReadRequest::TransparentOutputs(outpoints)) => {
                         assert!(outpoints.is_empty());
-                        ReadResponse::ExplorerTransparentOutputs(Vec::new())
+                        ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputs(Vec::new()))
                     }
                     ReadRequest::Depth(requested_hash) => {
                         assert_eq!(requested_hash, block_hash);
@@ -146,9 +150,11 @@ mod tests {
                     ReadRequest::FinalizedTip => {
                         ReadResponse::FinalizedTip(Some((Height(0), block_hash)))
                     }
-                    ReadRequest::ExplorerTransparentOutputSpends(outpoints) => {
-                        ReadResponse::ExplorerTransparentOutputSpends(vec![false; outpoints.len()])
-                    }
+                    ReadRequest::Explorer(ExplorerReadRequest::TransparentOutputSpends(
+                        outpoints,
+                    )) => ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputSpends(
+                        vec![false; outpoints.len()],
+                    )),
                     request => panic!("unexpected test state request: {request:?}"),
                 })
             }

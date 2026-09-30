@@ -1778,70 +1778,9 @@ pub enum ReadRequest {
     /// * [`ReadResponse::Transaction(None)`](ReadResponse::Transaction) otherwise.
     Transaction(transaction::Hash),
 
-    /// Returns one canonical explorer transaction page from finalized state and the
-    /// non-finalized best-chain suffix.
+    /// Routes an explorer-only read through the state service's isolated facade.
     #[cfg(feature = "indexer")]
-    ExplorerTransactionPage {
-        /// Transaction filters represented by compact state indexes.
-        query: crate::ExplorerTransactionQuery,
-        /// Requested page size. The state service clamps it to its supported maximum.
-        limit: u32,
-        /// Exclusive transaction location at which traversal starts.
-        cursor: Option<crate::TransactionLocation>,
-        /// Cursor traversal direction.
-        direction: crate::ExplorerPageDirection,
-    },
-
-    /// Resolves transparent outputs, including already-spent historical outputs,
-    /// in input order.
-    #[cfg(feature = "indexer")]
-    ExplorerTransparentOutputs(Arc<[transparent::OutPoint]>),
-
-    /// Returns spent status for transparent outputs, preserving request order.
-    #[cfg(feature = "indexer")]
-    ExplorerTransparentOutputSpends(Arc<[transparent::OutPoint]>),
-
-    /// Looks up compact canonical explorer metadata for one transaction hash.
-    #[cfg(feature = "indexer")]
-    ExplorerTransactionSummary(transaction::Hash),
-
-    /// Loads canonical block bodies and compact explorer aggregates in height order.
-    #[cfg(feature = "indexer")]
-    ExplorerBlockSummaries(Arc<[block::Height]>),
-
-    /// Returns canonical transparent-address state and one transaction page.
-    #[cfg(feature = "indexer")]
-    ExplorerAddressPage {
-        /// Transparent address whose activity is requested.
-        address: transparent::Address,
-        /// Requested page size. The state service clamps it to its supported maximum.
-        limit: u32,
-        /// Exclusive transaction location at which traversal starts.
-        cursor: Option<crate::TransactionLocation>,
-        /// Cursor traversal direction.
-        direction: crate::ExplorerPageDirection,
-    },
-
-    /// Loads canonical transactions by their chain locations, preserving request order.
-    #[cfg(feature = "indexer")]
-    ExplorerTransactionsByLocation(Arc<[crate::TransactionLocation]>),
-
-    /// Returns finalized canonical explorer totals and trailing activity.
-    #[cfg(feature = "indexer")]
-    ExplorerStatsSnapshot,
-
-    /// Returns finalized daily explorer analytics in chronological order.
-    #[cfg(feature = "indexer")]
-    ExplorerDailyStats,
-
-    /// Returns one finalized transparent-address balance ranking page.
-    #[cfg(feature = "indexer")]
-    ExplorerBalanceRankPage {
-        /// Requested page size, clamped by state.
-        limit: u32,
-        /// Exclusive stable ranking cursor.
-        cursor: Option<crate::ExplorerBalanceRankCursor>,
-    },
+    Explorer(crate::ExplorerReadRequest),
 
     /// Looks up a transaction by hash in any chain.
     ///
@@ -2289,25 +2228,7 @@ impl ReadRequest {
             ReadRequest::BlockHeader(_) => "block_header",
             ReadRequest::Transaction(_) => "transaction",
             #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransactionPage { .. } => "explorer_transaction_page",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransparentOutputs(_) => "explorer_transparent_outputs",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransparentOutputSpends(_) => "explorer_transparent_output_spends",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransactionSummary(_) => "explorer_transaction_summary",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerBlockSummaries(_) => "explorer_block_summaries",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerAddressPage { .. } => "explorer_address_page",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerTransactionsByLocation(_) => "explorer_transactions_by_location",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerStatsSnapshot => "explorer_stats_snapshot",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerDailyStats => "explorer_daily_stats",
-            #[cfg(feature = "indexer")]
-            ReadRequest::ExplorerBalanceRankPage { .. } => "explorer_balance_rank_page",
+            ReadRequest::Explorer(request) => request.variant_name(),
             ReadRequest::AnyChainTransaction(_) => "any_chain_transaction",
             ReadRequest::TransactionIdsForBlock(_) => "transaction_ids_for_block",
             ReadRequest::AnyChainTransactionIdsForBlock(_) => "any_chain_transaction_ids_for_block",

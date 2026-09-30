@@ -2,7 +2,10 @@
 
 use tower::ServiceExt;
 use zakura_chain::{block::Height, parameters::Network};
-use zakura_state::{ExplorerBlockSummary, ReadRequest, ReadResponse, ReadState};
+use zakura_state::{
+    ExplorerBlockSummary, ExplorerReadRequest, ExplorerReadResponse, ReadRequest, ReadResponse,
+    ReadState,
+};
 
 use super::cursor::BlockCursor;
 use crate::{
@@ -105,10 +108,12 @@ where
     }
 
     let response = read_state
-        .oneshot(ReadRequest::ExplorerBlockSummaries(heights.into()))
+        .oneshot(ReadRequest::Explorer(ExplorerReadRequest::BlockSummaries(
+            heights.into(),
+        )))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
-    let ReadResponse::ExplorerBlockSummaries(summaries) = response else {
+    let ReadResponse::Explorer(ExplorerReadResponse::BlockSummaries(summaries)) = response else {
         return Err(Error::StateResponse(
             "state returned the wrong response for explorer block summaries".to_string(),
         ));

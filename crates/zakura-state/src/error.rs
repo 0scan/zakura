@@ -214,6 +214,16 @@ pub enum StateInitError {
         source: BoxError,
     },
 
+    /// Explorer-owned indexes are missing or use an unsupported schema.
+    #[cfg(feature = "indexer")]
+    #[error("cannot open explorer state at {path:?}: {reason}")]
+    ExplorerSchema {
+        /// State database whose explorer schema is unavailable.
+        path: PathBuf,
+        /// Actionable schema mismatch detail.
+        reason: String,
+    },
+
     /// A read-only state was requested, but the configured cache directory is
     /// missing or unreadable.
     ///

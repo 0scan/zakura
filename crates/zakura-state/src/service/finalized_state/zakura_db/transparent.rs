@@ -494,8 +494,10 @@ impl DiskWriteBatch {
             transparent::OutPoint,
             OutputLocation,
         >,
+        #[cfg(feature = "indexer")]
+        explorer_context: &mut super::explorer::ExplorerBlockCommitContext,
         mut address_balances: AddressBalanceLocationUpdates,
-    ) -> u64 {
+    ) {
         let db = &zakura_db.db;
         let FinalizedBlock { block, height, .. } = finalized;
 
@@ -542,13 +544,13 @@ impl DiskWriteBatch {
         );
 
         #[cfg(feature = "indexer")]
-        let funded_transparent_address_count = self.prepare_explorer_balance_order_batch(
-            zakura_db,
-            &address_balances,
-            &previous_balance_zat,
+        explorer_context.set_funded_transparent_address_count(
+            self.prepare_explorer_balance_order_batch(
+                zakura_db,
+                &address_balances,
+                &previous_balance_zat,
+            ),
         );
-        #[cfg(not(feature = "indexer"))]
-        let funded_transparent_address_count = 0;
 
         // Write the new and spent transparent output index entries. These passes no longer
         // touch `address_balances`; they only read each entry's `address_location()`.
@@ -582,7 +584,6 @@ impl DiskWriteBatch {
         }
 
         self.prepare_transparent_balances_batch(db, address_balances);
-        funded_transparent_address_count
     }
 
     /// Update `address_balances` in memory for the transparent transfers in `transactions`,

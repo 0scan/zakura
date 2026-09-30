@@ -505,45 +505,9 @@ pub enum ReadResponse {
     /// Response to [`ReadRequest::Transaction`] with the specified transaction.
     Transaction(Option<MinedTx>),
 
-    /// Response to [`ReadRequest::ExplorerTransactionPage`] with canonical transaction summaries.
+    /// Response to an explorer-only state read.
     #[cfg(feature = "indexer")]
-    ExplorerTransactionPage(crate::ExplorerTransactionPage),
-
-    /// Response to [`ReadRequest::ExplorerTransparentOutputs`], parallel to the requested outpoints.
-    #[cfg(feature = "indexer")]
-    ExplorerTransparentOutputs(Vec<Option<transparent::Utxo>>),
-
-    /// Response to [`ReadRequest::ExplorerTransparentOutputSpends`], preserving request order.
-    #[cfg(feature = "indexer")]
-    ExplorerTransparentOutputSpends(Vec<bool>),
-
-    /// Response to [`ReadRequest::ExplorerTransactionSummary`].
-    #[cfg(feature = "indexer")]
-    ExplorerTransactionSummary(Option<crate::ExplorerTransactionSummary>),
-
-    /// Response to [`ReadRequest::ExplorerBlockSummaries`], parallel to requested heights.
-    #[cfg(feature = "indexer")]
-    ExplorerBlockSummaries(Vec<Option<crate::ExplorerBlockSummary>>),
-
-    /// Response to [`ReadRequest::ExplorerAddressPage`].
-    #[cfg(feature = "indexer")]
-    ExplorerAddressPage(Box<crate::ExplorerAddressPage>),
-
-    /// Response to [`ReadRequest::ExplorerTransactionsByLocation`], preserving request order.
-    #[cfg(feature = "indexer")]
-    ExplorerTransactionsByLocation(Vec<Option<Arc<Transaction>>>),
-
-    /// Response to [`ReadRequest::ExplorerStatsSnapshot`].
-    #[cfg(feature = "indexer")]
-    ExplorerStatsSnapshot(crate::ExplorerStatsSnapshot),
-
-    /// Response to [`ReadRequest::ExplorerDailyStats`].
-    #[cfg(feature = "indexer")]
-    ExplorerDailyStats(Vec<crate::ExplorerDailyStats>),
-
-    /// Response to [`ReadRequest::ExplorerBalanceRankPage`].
-    #[cfg(feature = "indexer")]
-    ExplorerBalanceRankPage(crate::ExplorerBalanceRankPage),
+    Explorer(crate::ExplorerReadResponse),
 
     /// Response to [`Request::Transaction`] with the specified transaction.
     AnyChainTransaction(Option<AnyTx>),
@@ -837,18 +801,12 @@ impl TryFrom<ReadResponse> for Response {
             }
 
             #[cfg(feature = "indexer")]
-            ReadResponse::TransactionId(_)
-            | ReadResponse::RawBlocks(_)
-            | ReadResponse::ExplorerTransactionPage(_)
-            | ReadResponse::ExplorerTransparentOutputs(_)
-            | ReadResponse::ExplorerTransparentOutputSpends(_)
-            | ReadResponse::ExplorerTransactionSummary(_)
-            | ReadResponse::ExplorerBlockSummaries(_)
-            | ReadResponse::ExplorerAddressPage(_)
-            | ReadResponse::ExplorerTransactionsByLocation(_)
-            | ReadResponse::ExplorerStatsSnapshot(_)
-            | ReadResponse::ExplorerDailyStats(_)
-            | ReadResponse::ExplorerBalanceRankPage(_) => {
+            ReadResponse::TransactionId(_) | ReadResponse::RawBlocks(_) => {
+                Err("there is no corresponding Response for this ReadResponse")
+            }
+
+            #[cfg(feature = "indexer")]
+            ReadResponse::Explorer(_) => {
                 Err("there is no corresponding Response for this ReadResponse")
             }
 
