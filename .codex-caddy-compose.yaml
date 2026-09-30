@@ -1,0 +1,28 @@
+name: edge
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: unless-stopped
+    init: true
+    networks:
+      - shared_network
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data:/data
+      - ./config:/config
+      - ./logs:/var/log/caddy
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+networks:
+  shared_network:
+    external: true
