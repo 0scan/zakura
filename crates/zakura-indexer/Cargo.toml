@@ -22,7 +22,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tower = { workspace = true, features = ["util"] }
 
-zakura-chain = { path = "../zakura-chain", version = "8.0.0" }
+zakura-chain = { path = "../zakura-chain", version = "9.0.0" }
 zakura-state = { path = "../zakura-state", version = "10.0.0", optional = true }
 
 [dev-dependencies]
