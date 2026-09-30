@@ -58,6 +58,21 @@ pub struct NetworkStats {
     pub node_version: String,
 }
 
+/// Local node synchronization relative to the estimated network tip.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+pub struct NodeSyncStats {
+    /// Estimated current network chain height.
+    pub estimated_network_height: String,
+    /// Current locally verified canonical chain height.
+    pub node_height: Option<String>,
+    /// Estimated number of blocks between the local node and the network tip.
+    pub lag: Option<String>,
+    /// Node verification progress, formatted with six decimal places.
+    pub verification_progress: String,
+    /// Whether the node is at or near the estimated network tip.
+    pub synced: bool,
+}
+
 /// Current mempool resource usage.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 pub struct MempoolStats {
@@ -94,8 +109,6 @@ pub struct SupplyStats {
 pub struct BlockchainRuntimeStats {
     /// On-disk state size reported by the state service.
     pub state_size_bytes: String,
-    /// Node verification progress, formatted with six decimal places.
-    pub verification_progress: String,
     /// Whether historical block bodies are subject to pruning.
     pub pruned: bool,
 }
@@ -103,8 +116,8 @@ pub struct BlockchainRuntimeStats {
 /// P0 explorer overview composed from indexer aggregates and live node services.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 pub struct ExplorerNetworkStatsResponse {
-    /// Index catch-up progress.
-    pub indexer: IndexerStatusResponse,
+    /// Local node synchronization relative to the estimated network tip.
+    pub sync: NodeSyncStats,
     /// All-time indexed canonical totals.
     pub totals: ChainTotals,
     /// Trailing activity ending at the indexed tip timestamp.

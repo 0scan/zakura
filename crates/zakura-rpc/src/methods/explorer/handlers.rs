@@ -27,7 +27,8 @@ use crate::server::{self, error::MapError};
 
 #[cfg(feature = "indexer")]
 use super::types::{
-    BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, SupplyPoolStats, SupplyStats,
+    BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, NodeSyncStats, SupplyPoolStats,
+    SupplyStats,
 };
 use super::{
     mempool,
@@ -324,6 +325,22 @@ where
             let network_solps = network_solps?;
             let mempool = mempool?;
             let subsidy = subsidy.ok();
+            let estimated_network_height = blockchain.estimated_height();
+            let node_height = chain_tip.map(|(height, _)| height);
+            let sync = NodeSyncStats {
+                estimated_network_height: estimated_network_height.0.to_string(),
+                node_height: node_height.map(|height| height.0.to_string()),
+                lag: node_height.map(|height| {
+                    estimated_network_height
+                        .0
+                        .saturating_sub(height.0)
+                        .to_string()
+                }),
+                verification_progress: format!("{:.6}", blockchain.verification_progress()),
+                synced: self
+                    .latest_chain_tip
+                    .is_at_or_near_network_tip(&self.network),
+            };
             let target_block_time_seconds = chain_tip.as_ref().and_then(|(height, _)| {
                 u64::try_from(
                     NetworkUpgrade::target_spacing_for_height(&self.network, *height).num_seconds(),
@@ -347,11 +364,7 @@ where
                     .collect(),
             };
             let response = ExplorerNetworkStatsResponse {
-                indexer: indexer_status(
-                    chain_tip,
-                    indexer_stats.indexed_height.as_deref(),
-                    indexer_stats.indexed_block_hash.as_deref(),
-                ),
+                sync,
                 totals: indexer_stats.totals,
                 trailing_24h: indexer_stats.trailing_24h,
                 mining: MiningStats {
@@ -391,7 +404,6 @@ where
                 supply,
                 blockchain: BlockchainRuntimeStats {
                     state_size_bytes: blockchain.size_on_disk().to_string(),
-                    verification_progress: format!("{:.6}", blockchain.verification_progress()),
                     pruned: blockchain.pruned(),
                 },
                 generated_at: Utc::now().timestamp().to_string(),
