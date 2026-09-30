@@ -16,6 +16,7 @@ pub use mempool::{
 pub use requests::{GetAddressTransactionsRequest, GetBlocksRequest, GetTransactionsRequest};
 #[cfg(feature = "indexer")]
 pub(super) use stats::{
-    BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, SupplyPoolStats, SupplyStats,
+    BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, NodeSyncStats,
+    SupplyPoolStats, SupplyStats,
 };
 pub use stats::{ExplorerNetworkStatsResponse, IndexerStatusResponse};
