@@ -207,6 +207,14 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     result: |g| g.result::<openrpsee::openrpc::ResultType>("getaddresstransactions_result"),
     deprecated: false,
 },
+"getaddressutxospage" => openrpsee::openrpc::RpcMethod {
+    description: "Returns a cursor-paginated page of current transparent unspent outputs\nfor one address. The legacy `getaddressutxos` method remains unchanged.\n\nmethod: post\ntags: address\n\n# Parameters\n\n- `request`: (object, required) Address and cursor pagination parameters.\n",
+    params: |_g| vec![
+        _g.param::<GetAddressUtxosPageRequest>("request", crate::methods::PARAM_REQUEST_DESC, true),
+    ],
+    result: |g| g.result::<openrpsee::openrpc::ResultType>("getaddressutxospage_result"),
+    deprecated: false,
+},
 "getindexerstatus" => openrpsee::openrpc::RpcMethod {
     description: "Returns explorer index catch-up progress relative to the node state tip.\n\nmethod: post\ntags: explorer\n",
     params: |_g| vec![

@@ -5,15 +5,19 @@ mod requests;
 mod stats;
 
 pub(in crate::methods) use zakura_indexer::{
-    AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, ChartDataRequest,
-    ChartDataResponse, TopBalancesRequest, TopBalancesResponse, TransactionsResponse,
+    AddressSummary, AddressTransactionsResponse, AddressUtxosResponse, BlockDetails,
+    BlocksResponse, ChartDataRequest, ChartDataResponse, TopBalancesRequest, TopBalancesResponse,
+    TransactionsResponse,
 };
 
 pub use mempool::{
     MempoolTransactionListItem, MempoolTransactionMetadata, MempoolTransactionSummary,
     MempoolTransactionsResponse, PendingTransactionDetails, TransactionDetailsResponse,
 };
-pub use requests::{GetAddressTransactionsRequest, GetBlocksRequest, GetTransactionsRequest};
+pub use requests::{
+    GetAddressTransactionsRequest, GetAddressUtxosPageRequest, GetBlocksRequest,
+    GetTransactionsRequest,
+};
 #[cfg(feature = "indexer")]
 pub(super) use stats::{
     BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, NodeSyncStats,
