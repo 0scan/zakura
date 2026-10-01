@@ -29,9 +29,17 @@ impl ZakuraDb {
         };
         entries
             .drain(..)
-            .map(|(key, ())| ExplorerBalanceRankEntry {
-                address: key.address(),
-                balance_zat: key.balance_zat(),
+            .map(|(key, ())| {
+                let address = key.address();
+                let transaction_count = self
+                    .explorer_address_record(address)
+                    .expect("a funded ranked address has explorer activity metadata")
+                    .transaction_count;
+                ExplorerBalanceRankEntry {
+                    address,
+                    balance_zat: key.balance_zat(),
+                    transaction_count,
+                }
             })
             .collect()
     }
@@ -224,5 +232,47 @@ mod tests {
         batch.prepare_explorer_balance_order_batch(&db, &updates, &previous_balance_zat);
 
         assert_eq!(batch, DiskWriteBatch::new());
+    }
+
+    #[test]
+    fn balance_ranking_includes_indexed_address_transaction_count() {
+        let network = Network::Mainnet;
+        let db = ZakuraDb::new(
+            &Config::ephemeral(),
+            STATE_DATABASE_KIND,
+            &state_database_format_version_in_code(),
+            &network,
+            true,
+            STATE_COLUMN_FAMILIES_IN_CODE
+                .iter()
+                .map(ToString::to_string),
+            false,
+        )
+        .expect("opening an ephemeral database should succeed");
+        let address = Address::from_pub_key_hash(NetworkKind::Mainnet, [2; 20]);
+        let location = crate::TransactionLocation::from_usize(Height(1), 0);
+        let activity = crate::ExplorerAddressRecord {
+            transaction_count: 7,
+            first_location: location,
+            last_location: location,
+            first_funding_location: Some(location),
+        };
+        let mut batch = DiskWriteBatch::new();
+        let _ = db
+            .explorer_address_meta_cf()
+            .with_batch_for_writing(&mut batch)
+            .zs_insert(&address.into(), &activity);
+        let _ = db
+            .explorer_balance_order_cf()
+            .with_batch_for_writing(&mut batch)
+            .zs_insert(&ExplorerBalanceKey::new(address, 100), &());
+        db.write_batch(batch)
+            .expect("test explorer records should be written atomically");
+
+        let entries = db.explorer_balance_entries(None, 1);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].address, address);
+        assert_eq!(entries[0].balance_zat, 100);
+        assert_eq!(entries[0].transaction_count, 7);
     }
 }

@@ -49,6 +49,15 @@ pub struct RollingDayStats {
     pub block_bytes: String,
     /// Sum of non-coinbase transaction fees in the window.
     pub total_fees_zat: String,
+    /// Sum of consensus block subsidies scheduled in the window.
+    pub scheduled_subsidy_zat: String,
+    /// Sum of allowed coinbase value not claimed by block producers in the window.
+    pub coinbase_unclaimed_zat: String,
+    /// Signed change in consensus `IssuedSupply` across the window.
+    ///
+    /// This is absent when the bounded scan did not reach the block immediately
+    /// before the window, so an exact supply delta cannot be calculated.
+    pub issued_supply_change_zat: Option<String>,
     /// Mean time between sampled blocks, formatted with one decimal place.
     pub average_block_time_seconds: Option<String>,
     /// Mean consensus-serialized block size, formatted with one decimal place.
@@ -68,4 +77,36 @@ pub struct IndexerStats {
     pub totals: ChainTotals,
     /// Trailing activity ending at the indexed tip timestamp.
     pub trailing_24h: RollingDayStats,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RollingDayStats;
+
+    #[test]
+    fn rolling_day_stats_serializes_issuance_accounting() {
+        let stats = RollingDayStats {
+            complete: true,
+            window_start: Some("100".to_string()),
+            window_end: Some("200".to_string()),
+            block_count: "2".to_string(),
+            transaction_count: "3".to_string(),
+            transparent_transaction_count: "1".to_string(),
+            shielded_transaction_count: "0".to_string(),
+            coinbase_transaction_count: "2".to_string(),
+            block_bytes: "400".to_string(),
+            total_fees_zat: "5".to_string(),
+            scheduled_subsidy_zat: "50".to_string(),
+            coinbase_unclaimed_zat: "10".to_string(),
+            issued_supply_change_zat: Some("40".to_string()),
+            average_block_time_seconds: Some("100.0".to_string()),
+            average_block_size_bytes: Some("200.0".to_string()),
+            average_transactions_per_block: Some("1.5".to_string()),
+        };
+
+        let json = serde_json::to_value(stats).expect("rolling stats serialize to JSON");
+        assert_eq!(json["scheduled_subsidy_zat"], "50");
+        assert_eq!(json["coinbase_unclaimed_zat"], "10");
+        assert_eq!(json["issued_supply_change_zat"], "40");
+    }
 }

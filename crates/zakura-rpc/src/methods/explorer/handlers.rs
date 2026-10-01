@@ -27,8 +27,8 @@ use crate::server::{self, error::MapError};
 
 #[cfg(feature = "indexer")]
 use super::types::{
-    BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, NodeSyncStats, SupplyPoolStats,
-    SupplyStats,
+    BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, NodeSyncStats,
+    SupplyPoolStats, SupplyStats,
 };
 use super::{
     mempool,

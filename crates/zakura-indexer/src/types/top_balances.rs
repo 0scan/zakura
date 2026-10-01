@@ -25,6 +25,9 @@ pub struct TopBalanceEntry {
 
     /// Current indexed balance in zatoshis.
     pub balance_zat: String,
+
+    /// Number of canonical transactions involving this address.
+    pub transaction_count: String,
 }
 
 /// Aggregate values displayed above the top-balances table.
@@ -82,4 +85,22 @@ pub struct TopBalancesResponse {
 
     /// Indexed chain hash represented by this ranking.
     pub indexed_block_hash: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TopBalanceEntry;
+
+    #[test]
+    fn top_balance_entry_serializes_transaction_count() {
+        let entry = TopBalanceEntry {
+            rank: 1,
+            address: "t1example".to_string(),
+            balance_zat: "100".to_string(),
+            transaction_count: "7".to_string(),
+        };
+
+        let json = serde_json::to_value(entry).expect("top-balance entry serializes to JSON");
+        assert_eq!(json["transaction_count"], "7");
+    }
 }

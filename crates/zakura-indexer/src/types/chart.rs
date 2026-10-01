@@ -13,6 +13,8 @@ pub struct ChartDataRequest {
     pub end_date: Option<String>,
     /// Maximum number of entries to return.
     pub limit: Option<usize>,
+    /// Include provisional daily aggregates from the best non-finalized chain.
+    pub include_non_finalized: bool,
 }
 
 /// One daily snapshot, with interval fields measured since the previous snapshot.
@@ -110,4 +112,22 @@ pub struct ChartDataResponse {
     pub entries: Vec<ChartDataEntry>,
     /// Inclusive start date for the next page.
     pub next_start_date: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChartDataRequest;
+
+    #[test]
+    fn live_chart_data_is_opt_in() {
+        let finalized: ChartDataRequest = serde_json::from_value(serde_json::json!({}))
+            .expect("an empty chart request uses finalized defaults");
+        assert!(!finalized.include_non_finalized);
+
+        let live: ChartDataRequest = serde_json::from_value(serde_json::json!({
+            "include_non_finalized": true
+        }))
+        .expect("the live chart flag is accepted");
+        assert!(live.include_non_finalized);
+    }
 }

@@ -80,6 +80,7 @@ where
                 .expect("top-balances rank fits in u64"),
             address: entry.address.to_string(),
             balance_zat: entry.balance_zat.to_string(),
+            transaction_count: entry.transaction_count.to_string(),
         })
         .collect::<Vec<_>>();
     let next_cursor = if page.has_more {
