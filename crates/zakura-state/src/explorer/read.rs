@@ -41,8 +41,15 @@ pub fn handle(
             limit,
             cursor,
             direction,
+            height_range,
         } => ExplorerReadResponse::TransactionPage(explorer_transaction_page(
-            chain, db, query, limit, cursor, direction,
+            chain,
+            db,
+            query,
+            limit,
+            cursor,
+            direction,
+            height_range,
         )),
         ExplorerReadRequest::TransparentOutputs(outpoints) => {
             ExplorerReadResponse::TransparentOutputs(explorer_transparent_outputs(
@@ -71,8 +78,15 @@ pub fn handle(
             limit,
             cursor,
             direction,
+            height_range,
         } => ExplorerReadResponse::AddressPage(Box::new(explorer_address_page(
-            chain, db, address, limit, cursor, direction,
+            chain,
+            db,
+            address,
+            limit,
+            cursor,
+            direction,
+            height_range,
         )?)),
         ExplorerReadRequest::TransactionsByLocation(locations) => {
             ExplorerReadResponse::TransactionsByLocation(explorer_transactions_by_location(
@@ -189,13 +203,16 @@ pub fn explorer_transaction_page(
     limit: u32,
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
+    height_range: std::ops::RangeInclusive<zakura_chain::block::Height>,
 ) -> ExplorerTransactionPage {
+    let from_height = *height_range.start();
+    let to_height = *height_range.end();
     let finalized_tip = db.tip();
     let best_tip = chain
         .as_ref()
         .map(|chain| chain.non_finalized_tip())
         .or(finalized_tip);
-    if !query.is_valid() {
+    if !query.is_valid() || from_height > to_height {
         return ExplorerTransactionPage {
             best_tip,
             finalized_tip,
@@ -209,12 +226,29 @@ pub fn explorer_transaction_page(
         .expect("the explorer page-size limit fits in usize");
     let scan_limit = requested.saturating_add(1);
     let cursor_valid = cursor.is_none_or(|location| {
-        explorer_transaction_summary_at_location(chain.as_ref(), db, location)
-            .is_some_and(|summary| query.matches(location, summary.record))
+        location.height >= from_height
+            && location.height <= to_height
+            && explorer_transaction_summary_at_location(chain.as_ref(), db, location)
+                .is_some_and(|summary| query.matches(location, summary.record))
     });
-    let mut transactions = finalized_summaries(db, query, cursor, direction, scan_limit);
+    let mut transactions = finalized_summaries(
+        db,
+        query,
+        cursor,
+        direction,
+        from_height,
+        to_height,
+        scan_limit,
+    );
     if let Some(chain) = chain {
-        transactions.extend(non_finalized_summaries(&chain, query, cursor, direction));
+        transactions.extend(non_finalized_summaries(
+            &chain,
+            query,
+            cursor,
+            direction,
+            from_height,
+            to_height,
+        ));
     }
 
     transactions.sort_unstable_by_key(|summary| summary.location);
@@ -279,7 +313,10 @@ pub fn explorer_address_page(
     limit: u32,
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
+    height_range: std::ops::RangeInclusive<zakura_chain::block::Height>,
 ) -> Result<ExplorerAddressPage, crate::BoxError> {
+    let from_height = *height_range.start();
+    let to_height = *height_range.end();
     let requested = usize::try_from(limit.clamp(1, MAX_EXPLORER_PAGE_SIZE))
         .map_err(|_| crate::BoxError::from("explorer page size exceeds usize"))?;
     let scan_limit = requested.saturating_add(1);
@@ -291,19 +328,26 @@ pub fn explorer_address_page(
     let addresses = HashSet::from([address]);
     let (balance, received_zat) = transparent_balance(chain.clone(), db, addresses.clone())?;
 
-    let mut locations =
-        db.explorer_address_transaction_locations(address, cursor, direction, scan_limit);
+    let mut locations = db.explorer_address_transaction_locations(
+        address,
+        cursor,
+        direction,
+        from_height,
+        to_height,
+        scan_limit,
+    );
     let mut all_non_finalized_locations = Vec::new();
     if let Some(chain) = chain.as_ref() {
         let finalized_height = finalized_tip.map(|(height, _)| height);
-        all_non_finalized_locations = chain
-            .partial_transparent_tx_ids(
-                &addresses,
-                chain.non_finalized_root_height()..=chain.non_finalized_tip_height(),
-            )
-            .into_keys()
-            .filter(|location| finalized_height.is_none_or(|height| location.height > height))
-            .collect();
+        let range_start = chain.non_finalized_root_height().max(from_height);
+        let range_end = chain.non_finalized_tip_height().min(to_height);
+        if range_start <= range_end {
+            all_non_finalized_locations = chain
+                .partial_transparent_tx_ids(&addresses, range_start..=range_end)
+                .into_keys()
+                .filter(|location| finalized_height.is_none_or(|height| location.height > height))
+                .collect();
+        }
         locations.extend(
             all_non_finalized_locations
                 .iter()
@@ -316,8 +360,10 @@ pub fn explorer_address_page(
         );
     }
     let cursor_valid = cursor.is_none_or(|cursor| {
-        db.explorer_address_contains_transaction(address, cursor)
-            || all_non_finalized_locations.contains(&cursor)
+        cursor.height >= from_height
+            && cursor.height <= to_height
+            && (db.explorer_address_contains_transaction(address, cursor)
+                || all_non_finalized_locations.contains(&cursor))
     });
     locations.sort_unstable();
     locations.dedup();
@@ -733,9 +779,11 @@ fn finalized_summaries(
     query: ExplorerTransactionQuery,
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
+    from_height: zakura_chain::block::Height,
+    to_height: zakura_chain::block::Height,
     limit: usize,
 ) -> Vec<ExplorerTransactionSummary> {
-    db.explorer_transaction_locations(query, cursor, direction, limit)
+    db.explorer_transaction_locations(query, cursor, direction, from_height, to_height, limit)
         .into_iter()
         .map(|location| {
             let txid = db
@@ -768,10 +816,16 @@ fn non_finalized_summaries(
     query: ExplorerTransactionQuery,
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
+    from_height: zakura_chain::block::Height,
+    to_height: zakura_chain::block::Height,
 ) -> Vec<ExplorerTransactionSummary> {
-    let root = chain.non_finalized_root_height();
-    let tip = chain.non_finalized_tip_height();
+    let root = chain.non_finalized_root_height().max(from_height);
+    let tip = chain.non_finalized_tip_height().min(to_height);
     let mut summaries = Vec::new();
+
+    if root > tip {
+        return summaries;
+    }
 
     for height in root.0..=tip.0 {
         let block = chain

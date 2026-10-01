@@ -1,6 +1,6 @@
 //! Public explorer query contracts backed by canonical state.
 
-use std::sync::Arc;
+use std::{ops::RangeInclusive, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use zakura_chain::{block, transaction, transparent};
@@ -109,6 +109,8 @@ pub enum ExplorerReadRequest {
         cursor: Option<TransactionLocation>,
         /// Cursor traversal direction.
         direction: ExplorerPageDirection,
+        /// Inclusive block-height bounds.
+        height_range: RangeInclusive<block::Height>,
     },
     /// Resolves transparent outputs, including already-spent historical outputs.
     TransparentOutputs(Arc<[transparent::OutPoint]>),
@@ -128,6 +130,8 @@ pub enum ExplorerReadRequest {
         cursor: Option<TransactionLocation>,
         /// Cursor traversal direction.
         direction: ExplorerPageDirection,
+        /// Inclusive block-height bounds for returned transactions.
+        height_range: RangeInclusive<block::Height>,
     },
     /// Loads canonical transactions by their chain locations, preserving request order.
     TransactionsByLocation(Arc<[TransactionLocation]>),

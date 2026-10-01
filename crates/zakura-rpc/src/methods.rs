@@ -114,10 +114,12 @@ pub(crate) mod trees;
 pub(crate) mod types;
 
 use explorer::types::{
-    AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse, ChartDataRequest,
-    ChartDataResponse, ExplorerNetworkStatsResponse, GetAddressTransactionsRequest,
-    GetBlocksRequest, GetTransactionsRequest, IndexerStatusResponse, MempoolTransactionsResponse,
-    TopBalancesRequest, TopBalancesResponse, TransactionDetailsResponse, TransactionsResponse,
+    AddressSummary, AddressTransactionsResponse, AddressUtxosResponse, BlockDetails,
+    BlocksResponse, ChartDataRequest, ChartDataResponse, ExplorerNetworkStatsResponse,
+    GetAddressTransactionsRequest, GetAddressUtxosPageRequest, GetBlocksRequest,
+    GetMempoolTransactionsRequest, GetTransactionsRequest, IndexerStatusResponse,
+    MempoolTransactionsResponse, TopBalancesRequest, TopBalancesResponse,
+    TransactionDetailsResponse, TransactionsResponse,
 };
 use hex_data::HexData;
 use trees::{GetSubtreesByIndexResponse, GetTreestateResponse, SubtreeRpcData};
@@ -235,6 +237,7 @@ pub(crate) const RPC_METHOD_ACCESS: &[(&str, RpcAccess)] = &[
     ("gettransactiondetails", RpcAccess::Unauthenticated),
     ("getaddresssummary", RpcAccess::Unauthenticated),
     ("getaddresstransactions", RpcAccess::Unauthenticated),
+    ("getaddressutxospage", RpcAccess::Unauthenticated),
     ("getindexerstatus", RpcAccess::Unauthenticated),
     ("getnetworkstats", RpcAccess::Unauthenticated),
     ("getexplorerchartdata", RpcAccess::Unauthenticated),
@@ -728,7 +731,8 @@ pub trait Rpc {
     ///
     /// # Parameters
     ///
-    /// - `request`: (object, optional) Cursor pagination and transaction filters.
+    /// - `request`: (object, optional) Cursor pagination, transaction filters,
+    ///   and inclusive block-height bounds.
     #[method(name = "gettransactions")]
     async fn get_transactions(
         &self,
@@ -746,7 +750,7 @@ pub trait Rpc {
     #[method(name = "getmempooltransactions")]
     async fn get_mempool_transactions(
         &self,
-        request: Option<GetTransactionsRequest>,
+        request: Option<GetMempoolTransactionsRequest>,
     ) -> Result<MempoolTransactionsResponse>;
 
     /// Returns complete explorer details for one transaction from the live
@@ -781,12 +785,28 @@ pub trait Rpc {
     ///
     /// # Parameters
     ///
-    /// - `request`: (object, required) Address and cursor pagination parameters.
+    /// - `request`: (object, required) Address, cursor pagination, and inclusive
+    ///   block-height bounds.
     #[method(name = "getaddresstransactions")]
     async fn get_address_transactions(
         &self,
         request: GetAddressTransactionsRequest,
     ) -> Result<AddressTransactionsResponse>;
+
+    /// Returns a cursor-paginated page of current transparent unspent outputs
+    /// for one address. The legacy `getaddressutxos` method remains unchanged.
+    ///
+    /// method: post
+    /// tags: address
+    ///
+    /// # Parameters
+    ///
+    /// - `request`: (object, required) Address and cursor pagination parameters.
+    #[method(name = "getaddressutxospage")]
+    async fn get_address_utxos_page(
+        &self,
+        request: GetAddressUtxosPageRequest,
+    ) -> Result<AddressUtxosResponse>;
 
     /// Returns explorer index catch-up progress relative to the node state tip.
     ///
@@ -3055,7 +3075,7 @@ where
 
     async fn get_mempool_transactions(
         &self,
-        request: Option<GetTransactionsRequest>,
+        request: Option<GetMempoolTransactionsRequest>,
     ) -> Result<MempoolTransactionsResponse> {
         self.explorer_get_mempool_transactions(request).await
     }
@@ -3073,6 +3093,13 @@ where
         request: GetAddressTransactionsRequest,
     ) -> Result<AddressTransactionsResponse> {
         self.explorer_get_address_transactions(request).await
+    }
+
+    async fn get_address_utxos_page(
+        &self,
+        request: GetAddressUtxosPageRequest,
+    ) -> Result<AddressUtxosResponse> {
+        self.explorer_get_address_utxos_page(request).await
     }
 
     async fn get_indexer_status(&self) -> Result<IndexerStatusResponse> {

@@ -13,8 +13,9 @@ use zakura_chain::{chain_sync_status::ChainSyncStatus, chain_tip::ChainTip, tran
 use zakura_consensus::router::service_trait::BlockVerifierService;
 #[cfg(feature = "indexer")]
 use zakura_indexer::{
-    address_summary_from_state, address_transactions_page_from_state, block_details_from_state,
-    blocks_page_from_state, chart_data_from_state, stats_from_state, top_balances_from_state,
+    address_summary_from_state, address_transactions_page_from_state,
+    address_utxos_page_from_state, block_details_from_state, blocks_page_from_state,
+    chart_data_from_state, stats_from_state, top_balances_from_state,
     transaction_details_from_state, transactions_page_from_state,
 };
 use zakura_network::address_book_peers::AddressBookPeers;
@@ -33,11 +34,12 @@ use super::types::{
 use super::{
     mempool,
     types::{
-        AddressSummary, AddressTransactionsResponse, BlockDetails, BlocksResponse,
-        ChartDataRequest, ChartDataResponse, ExplorerNetworkStatsResponse,
-        GetAddressTransactionsRequest, GetBlocksRequest, GetTransactionsRequest,
-        IndexerStatusResponse, MempoolTransactionsResponse, TopBalancesRequest,
-        TopBalancesResponse, TransactionDetailsResponse, TransactionsResponse,
+        AddressSummary, AddressTransactionsResponse, AddressUtxosResponse, BlockDetails,
+        BlocksResponse, ChartDataRequest, ChartDataResponse, ExplorerNetworkStatsResponse,
+        GetAddressTransactionsRequest, GetAddressUtxosPageRequest, GetBlocksRequest,
+        GetMempoolTransactionsRequest, GetTransactionsRequest, IndexerStatusResponse,
+        MempoolTransactionsResponse, TopBalancesRequest, TopBalancesResponse,
+        TransactionDetailsResponse, TransactionsResponse,
     },
 };
 #[cfg(feature = "indexer")]
@@ -126,6 +128,7 @@ where
             let query = request
                 .transaction_query()
                 .map_error(server::error::LegacyCode::InvalidParameter)?;
+            let height_range = request.height_range();
 
             match transactions_page_from_state(
                 self.read_state.clone(),
@@ -133,6 +136,7 @@ where
                 request.limit,
                 request.cursor,
                 request.direction,
+                height_range,
             )
             .await
             {
@@ -148,7 +152,7 @@ where
 
     pub(in crate::methods) async fn explorer_get_mempool_transactions(
         &self,
-        request: Option<GetTransactionsRequest>,
+        request: Option<GetMempoolTransactionsRequest>,
     ) -> Result<MempoolTransactionsResponse> {
         let response = call_service(
             self.mempool.clone(),
@@ -262,10 +266,45 @@ where
         {
             let address = explorer_transparent_address(&self.network, &request.address)
                 .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
+            let height_range = request.height_range();
 
             match address_transactions_page_from_state(
                 self.read_state.clone(),
                 &self.network,
+                address,
+                request.limit,
+                request.cursor,
+                request.direction,
+                height_range,
+            )
+            .await
+            {
+                Ok(response) => Ok(response),
+                Err(
+                    error @ (zakura_indexer::Error::InvalidCursor(_)
+                    | zakura_indexer::Error::InvalidQuery(_)),
+                ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
+                Err(error) => Err(error).map_misc_error(),
+            }
+        }
+    }
+
+    pub(in crate::methods) async fn explorer_get_address_utxos_page(
+        &self,
+        request: GetAddressUtxosPageRequest,
+    ) -> Result<AddressUtxosResponse> {
+        #[cfg(not(feature = "indexer"))]
+        {
+            let _ = request;
+            return explorer_index_disabled();
+        }
+        #[cfg(feature = "indexer")]
+        {
+            let address = explorer_transparent_address(&self.network, &request.address)
+                .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
+
+            match address_utxos_page_from_state(
+                self.read_state.clone(),
                 address,
                 request.limit,
                 request.cursor,

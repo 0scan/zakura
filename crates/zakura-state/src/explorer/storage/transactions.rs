@@ -69,16 +69,32 @@ impl ZakuraDb {
         query: ExplorerTransactionQuery,
         cursor: Option<TransactionLocation>,
         direction: ExplorerPageDirection,
+        from_height: zakura_chain::block::Height,
+        to_height: zakura_chain::block::Height,
         limit: usize,
     ) -> Vec<TransactionLocation> {
-        if limit == 0 || !query.is_valid() {
+        if limit == 0 || !query.is_valid() || from_height > to_height {
             return Vec::new();
         }
 
         let mut locations = if query.uses_exact_shielded_index() {
-            self.explorer_shielded_locations(query, cursor, direction, limit)
+            self.explorer_shielded_locations(
+                query,
+                cursor,
+                direction,
+                from_height,
+                to_height,
+                limit,
+            )
         } else {
-            self.explorer_kind_locations(query.kind, cursor, direction, limit)
+            self.explorer_kind_locations(
+                query.kind,
+                cursor,
+                direction,
+                from_height,
+                to_height,
+                limit,
+            )
         };
         locations.sort_unstable();
         locations.dedup();
@@ -101,6 +117,8 @@ impl ZakuraDb {
         filter: ExplorerTransactionKindFilter,
         cursor: Option<TransactionLocation>,
         direction: ExplorerPageDirection,
+        from_height: zakura_chain::block::Height,
+        to_height: zakura_chain::block::Height,
         limit: usize,
     ) -> Vec<TransactionLocation> {
         let kinds: &[ExplorerTransactionKind] = match filter {
@@ -119,11 +137,11 @@ impl ZakuraDb {
         for &kind in kinds {
             let minimum = ExplorerTransactionKindLocation {
                 kind,
-                location: TransactionLocation::MIN,
+                location: TransactionLocation::min_for_height(from_height),
             };
             let maximum = ExplorerTransactionKindLocation {
                 kind,
-                location: TransactionLocation::MAX,
+                location: TransactionLocation::max_for_height(to_height),
             };
             match direction {
                 ExplorerPageDirection::Older => {
@@ -156,6 +174,8 @@ impl ZakuraDb {
         query: ExplorerTransactionQuery,
         cursor: Option<TransactionLocation>,
         direction: ExplorerPageDirection,
+        from_height: zakura_chain::block::Height,
+        to_height: zakura_chain::block::Height,
         limit: usize,
     ) -> Vec<TransactionLocation> {
         let flows: &[ExplorerShieldedFlow] = match query.flow {
@@ -218,13 +238,13 @@ impl ZakuraDb {
                         flow,
                         pool,
                         amount_bucket,
-                        location: TransactionLocation::MIN,
+                        location: TransactionLocation::min_for_height(from_height),
                     };
                     let maximum = ExplorerShieldedClassLocation {
                         flow,
                         pool,
                         amount_bucket,
-                        location: TransactionLocation::MAX,
+                        location: TransactionLocation::max_for_height(to_height),
                     };
                     match direction {
                         ExplorerPageDirection::Older => {
@@ -427,6 +447,8 @@ impl DiskWriteBatch {
                 address,
                 Some(location),
                 ExplorerPageDirection::Older,
+                zakura_chain::block::Height::MIN,
+                zakura_chain::block::Height::MAX,
                 1,
             )
             .into_iter()

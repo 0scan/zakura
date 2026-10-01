@@ -17,7 +17,7 @@ use zakura_indexer::{
 use zakura_node_services::mempool::TransactionDependencies;
 
 use super::types::{
-    GetTransactionsRequest, MempoolTransactionListItem, MempoolTransactionMetadata,
+    GetMempoolTransactionsRequest, MempoolTransactionListItem, MempoolTransactionMetadata,
     MempoolTransactionSummary, MempoolTransactionsResponse, PendingTransactionDetails,
 };
 
@@ -45,7 +45,7 @@ struct MempoolCursor {
 pub(super) fn transactions_page(
     transactions: Vec<VerifiedUnminedTx>,
     dependencies: &TransactionDependencies,
-    request: &GetTransactionsRequest,
+    request: &GetMempoolTransactionsRequest,
 ) -> Result<MempoolTransactionsResponse, Error> {
     let query = request.transaction_query().map_err(Error::InvalidQuery)?;
     let filter_tags = filter_tags(request)?;
@@ -480,7 +480,7 @@ fn count_u32(value: usize, name: &str) -> Result<u32, Error> {
     u32::try_from(value).map_err(|_| Error::Calculation(format!("{name} exceeds u32")))
 }
 
-fn filter_tags(request: &GetTransactionsRequest) -> Result<[u8; 4], Error> {
+fn filter_tags(request: &GetMempoolTransactionsRequest) -> Result<[u8; 4], Error> {
     let kind = match request.kind {
         TransactionKindFilter::All => 0,
         TransactionKindFilter::Shielded => 1,
@@ -580,7 +580,7 @@ mod tests {
         let response = transactions_page(
             Vec::new(),
             &TransactionDependencies::default(),
-            &GetTransactionsRequest::default(),
+            &GetMempoolTransactionsRequest::default(),
         )
         .unwrap();
 
@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn previous_mempool_page_requires_a_cursor() {
-        let request = GetTransactionsRequest {
+        let request = GetMempoolTransactionsRequest {
             direction: PageDirection::Previous,
             ..Default::default()
         };
