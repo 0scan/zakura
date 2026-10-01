@@ -48,6 +48,11 @@ where
             coinbase_transaction_count: rolling.totals.coinbase_transaction_count.to_string(),
             block_bytes: rolling.totals.block_bytes.to_string(),
             total_fees_zat: rolling.totals.total_fees_zat.to_string(),
+            scheduled_subsidy_zat: rolling.scheduled_subsidy_zat.to_string(),
+            coinbase_unclaimed_zat: rolling.coinbase_unclaimed_zat.to_string(),
+            issued_supply_change_zat: rolling
+                .issued_supply_change_zat
+                .map(|value| value.to_string()),
             average_block_time_seconds: ratio(elapsed, intervals),
             average_block_size_bytes: ratio(
                 u128::from(rolling.totals.block_bytes),

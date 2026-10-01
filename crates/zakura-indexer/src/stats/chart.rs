@@ -19,7 +19,9 @@ use crate::{
 const DEFAULT_CHART_DATA_RESULTS: usize = 10_000;
 const MAX_CHART_DATA_RESULTS: usize = 10_000;
 
-/// Returns finalized daily chart snapshots in ascending UTC date order.
+/// Returns daily chart snapshots in ascending UTC date order.
+///
+/// Snapshots are finalized unless [`ChartDataRequest::include_non_finalized`] is enabled.
 pub async fn chart_data_from_state<State>(
     read_state: State,
     network: &Network,
@@ -53,7 +55,9 @@ where
     }
 
     let response = read_state
-        .oneshot(ReadRequest::Explorer(ExplorerReadRequest::DailyStats))
+        .oneshot(ReadRequest::Explorer(ExplorerReadRequest::DailyStats {
+            include_non_finalized: request.include_non_finalized,
+        }))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;
     let ReadResponse::Explorer(ExplorerReadResponse::DailyStats(rows)) = response else {

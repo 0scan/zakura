@@ -133,8 +133,11 @@ pub enum ExplorerReadRequest {
     TransactionsByLocation(Arc<[TransactionLocation]>),
     /// Returns finalized canonical explorer totals and trailing activity.
     StatsSnapshot,
-    /// Returns finalized daily explorer analytics in chronological order.
-    DailyStats,
+    /// Returns daily explorer analytics in chronological order.
+    DailyStats {
+        /// Merge provisional aggregates from the best non-finalized chain.
+        include_non_finalized: bool,
+    },
     /// Returns one finalized transparent-address balance ranking page.
     BalanceRankPage {
         /// Requested page size, clamped by state.
@@ -156,7 +159,7 @@ impl ExplorerReadRequest {
             Self::AddressPage { .. } => "explorer_address_page",
             Self::TransactionsByLocation(_) => "explorer_transactions_by_location",
             Self::StatsSnapshot => "explorer_stats_snapshot",
-            Self::DailyStats => "explorer_daily_stats",
+            Self::DailyStats { .. } => "explorer_daily_stats",
             Self::BalanceRankPage { .. } => "explorer_balance_rank_page",
         }
     }
@@ -509,6 +512,9 @@ pub struct ExplorerRollingStats {
     pub window_end: Option<i64>,
     pub oldest_timestamp: Option<i64>,
     pub totals: ExplorerChainStats,
+    pub scheduled_subsidy_zat: u128,
+    pub coinbase_unclaimed_zat: u128,
+    pub issued_supply_change_zat: Option<i128>,
 }
 
 /// One internally consistent canonical analytics snapshot.
@@ -526,6 +532,7 @@ pub struct ExplorerStatsSnapshot {
 pub struct ExplorerBalanceRankEntry {
     pub address: transparent::Address,
     pub balance_zat: u64,
+    pub transaction_count: u64,
 }
 
 /// Stable state cursor for transparent balance ranking.

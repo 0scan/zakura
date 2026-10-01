@@ -1,7 +1,7 @@
 //! Canonical explorer reads merged across finalized and non-finalized state.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -82,8 +82,10 @@ pub fn handle(
         ExplorerReadRequest::StatsSnapshot => {
             ExplorerReadResponse::StatsSnapshot(explorer_stats_snapshot(db))
         }
-        ExplorerReadRequest::DailyStats => {
-            ExplorerReadResponse::DailyStats(explorer_daily_stats(db))
+        ExplorerReadRequest::DailyStats {
+            include_non_finalized,
+        } => {
+            ExplorerReadResponse::DailyStats(explorer_daily_stats(chain, db, include_non_finalized))
         }
         ExplorerReadRequest::BalanceRankPage { limit, cursor } => {
             ExplorerReadResponse::BalanceRankPage(explorer_balance_rank_page(db, limit, cursor))
@@ -418,6 +420,9 @@ pub fn explorer_stats_snapshot(db: &ZakuraDb) -> crate::ExplorerStatsSnapshot {
     let mut rolling = crate::ExplorerChainStats::default();
     let mut oldest_timestamp = window_end;
     let mut complete = false;
+    let mut scheduled_subsidy_zat = 0_u128;
+    let mut coinbase_unclaimed_zat = 0_u128;
+    let mut boundary_issued_supply = None;
     let mut height = tip_height;
 
     for _ in 0..EXPLORER_ROLLING_SCAN_LIMIT {
@@ -426,18 +431,28 @@ pub fn explorer_stats_snapshot(db: &ZakuraDb) -> crate::ExplorerStatsSnapshot {
             .expect("finalized explorer heights have block analytics");
         if block.timestamp < window_start {
             complete = true;
+            boundary_issued_supply = Some(block.total_issuance);
             break;
         }
         crate::explorer::analytics::add_block_to_chain_stats(&mut rolling, &block);
+        scheduled_subsidy_zat = scheduled_subsidy_zat
+            .checked_add(block.interval.total_subsidy_zat)
+            .expect("a bounded rolling window subsidy total fits in u128");
+        coinbase_unclaimed_zat = coinbase_unclaimed_zat
+            .checked_add(block.interval.coinbase_unclaimed_zat)
+            .expect("a bounded rolling window unclaimed total fits in u128");
         oldest_timestamp = oldest_timestamp.min(block.timestamp);
         match height.previous() {
             Ok(previous) => height = previous,
             Err(_) => {
                 complete = true;
+                boundary_issued_supply = Some(0);
                 break;
             }
         }
     }
+
+    let issued_supply_change_zat = issued_supply_change(tip.total_issuance, boundary_issued_supply);
 
     crate::ExplorerStatsSnapshot {
         best_tip,
@@ -448,13 +463,156 @@ pub fn explorer_stats_snapshot(db: &ZakuraDb) -> crate::ExplorerStatsSnapshot {
             window_end: Some(window_end),
             oldest_timestamp: Some(oldest_timestamp),
             totals: rolling,
+            scheduled_subsidy_zat,
+            coinbase_unclaimed_zat,
+            issued_supply_change_zat,
         },
     }
 }
 
-/// Returns every finalized UTC daily snapshot in ascending order.
-pub fn explorer_daily_stats(db: &ZakuraDb) -> Vec<crate::ExplorerDailyStats> {
-    db.explorer_daily_stats()
+fn issued_supply_change(
+    tip_issued_supply: u64,
+    boundary_issued_supply: Option<u64>,
+) -> Option<i128> {
+    boundary_issued_supply.map(|boundary| i128::from(tip_issued_supply) - i128::from(boundary))
+}
+
+/// Returns UTC daily snapshots in ascending order, optionally merged with the best live chain.
+pub fn explorer_daily_stats(
+    chain: Option<Arc<Chain>>,
+    db: &ZakuraDb,
+    include_non_finalized: bool,
+) -> Vec<crate::ExplorerDailyStats> {
+    let finalized = db.explorer_daily_stats();
+    if !include_non_finalized {
+        return finalized;
+    }
+    let Some(chain) = chain else {
+        return finalized;
+    };
+
+    let mut by_day = finalized
+        .into_iter()
+        .map(|stats| (stats.day, stats))
+        .collect::<BTreeMap<_, _>>();
+    let network = chain.network();
+    let first_height = chain.non_finalized_root_height();
+    let last_height = chain.non_finalized_tip_height();
+    let finalized_anchor = first_height
+        .previous()
+        .ok()
+        .and_then(|height| db.explorer_block_stats(height));
+    let mut previous_timestamp = finalized_anchor.as_ref().map(|block| block.timestamp);
+    let mut previous_pool_nsm = finalized_anchor
+        .as_ref()
+        .map(|block| block.pool_nsm)
+        .unwrap_or_default();
+    let mut funded_transparent_address_count =
+        db.explorer_chain_stats().funded_transparent_address_count;
+    let mut transparent_balances = HashMap::new();
+
+    for raw_height in first_height.0..=last_height.0 {
+        let height = zakura_chain::block::Height(raw_height);
+        let contextual = chain
+            .block(height.into())
+            .expect("best non-finalized chain contains every height in its range");
+        funded_transparent_address_count = apply_live_transparent_balance_changes(
+            db,
+            &network,
+            contextual,
+            &mut transparent_balances,
+            funded_transparent_address_count,
+        );
+        let block_info = chain
+            .block_info(height.into())
+            .expect("best non-finalized chain contains block info for every height");
+        let spent_utxos = contextual
+            .spent_outputs
+            .iter()
+            .map(|(outpoint, ordered)| (*outpoint, ordered.utxo.clone()))
+            .collect::<HashMap<_, _>>();
+        let block = super::analytics::derive_block_stats(
+            &contextual.block,
+            height,
+            block_info.size(),
+            *block_info.value_pools(),
+            &spent_utxos,
+            previous_pool_nsm,
+            funded_transparent_address_count,
+            &network,
+        );
+        let day = super::analytics::day_number(block.timestamp);
+        super::analytics::add_block_to_daily_stats(
+            by_day.entry(day).or_default(),
+            &block,
+            previous_timestamp,
+        );
+        previous_timestamp = Some(block.timestamp);
+        previous_pool_nsm = block.pool_nsm;
+    }
+
+    by_day.into_values().collect()
+}
+
+fn apply_live_transparent_balance_changes(
+    db: &ZakuraDb,
+    network: &zakura_chain::parameters::Network,
+    block: &crate::ContextuallyVerifiedBlock,
+    balances: &mut HashMap<transparent::Address, u64>,
+    mut funded_count: u64,
+) -> u64 {
+    let mut changes = HashMap::<transparent::Address, i128>::new();
+    for transaction in &block.block.transactions {
+        for outpoint in transaction
+            .inputs()
+            .iter()
+            .filter_map(|input| input.outpoint())
+        {
+            let spent = block
+                .spent_outputs
+                .get(&outpoint)
+                .expect("verified block inputs have resolved transparent outputs");
+            if let Some(address) = spent.utxo.output.address(network) {
+                let value = i128::from(spent.utxo.output.value().zatoshis());
+                *changes.entry(address).or_default() -= value;
+            }
+        }
+        for output in transaction.outputs() {
+            if let Some(address) = output.address(network) {
+                let value = i128::from(output.value().zatoshis());
+                *changes.entry(address).or_default() += value;
+            }
+        }
+    }
+
+    for (address, change) in changes {
+        let old_balance = balances.get(&address).copied().unwrap_or_else(|| {
+            db.address_balance(&address)
+                .map(|(amount, _)| {
+                    u64::try_from(amount.zatoshis())
+                        .expect("finalized transparent balances are nonnegative")
+                })
+                .unwrap_or_default()
+        });
+        let new_balance = u64::try_from(i128::from(old_balance) + change)
+            .expect("verified transparent balance remains nonnegative");
+        match (old_balance > 0, new_balance > 0) {
+            (false, true) => {
+                funded_count = funded_count
+                    .checked_add(1)
+                    .expect("funded transparent address count fits in u64");
+            }
+            (true, false) => {
+                funded_count = funded_count
+                    .checked_sub(1)
+                    .expect("removed funded address was previously counted");
+            }
+            _ => {}
+        }
+        balances.insert(address, new_balance);
+    }
+
+    funded_count
 }
 
 /// Returns one stable page from the finalized transparent balance ranking.
@@ -659,7 +817,14 @@ fn non_finalized_summaries(
 mod tests {
     use zakura_chain::{parameters::NetworkKind, transparent::Address};
 
-    use super::top_balance_totals;
+    use super::{issued_supply_change, top_balance_totals};
+
+    #[test]
+    fn issued_supply_change_requires_a_complete_window_boundary() {
+        assert_eq!(issued_supply_change(125, Some(100)), Some(25));
+        assert_eq!(issued_supply_change(100, Some(125)), Some(-25));
+        assert_eq!(issued_supply_change(125, None), None);
+    }
 
     #[test]
     fn top_balance_totals_use_only_the_first_hundred_entries() {
@@ -667,6 +832,7 @@ mod tests {
             .map(|index| crate::ExplorerBalanceRankEntry {
                 address: Address::from_pub_key_hash(NetworkKind::Mainnet, [index; 20]),
                 balance_zat: 1,
+                transaction_count: u64::from(index),
             })
             .collect::<Vec<_>>();
 
