@@ -117,8 +117,9 @@ use explorer::types::{
     AddressSummary, AddressTransactionsResponse, AddressUtxosResponse, BlockDetails,
     BlocksResponse, ChartDataRequest, ChartDataResponse, ExplorerNetworkStatsResponse,
     GetAddressTransactionsRequest, GetAddressUtxosPageRequest, GetBlocksRequest,
-    GetTransactionsRequest, IndexerStatusResponse, MempoolTransactionsResponse, TopBalancesRequest,
-    TopBalancesResponse, TransactionDetailsResponse, TransactionsResponse,
+    GetMempoolTransactionsRequest, GetTransactionsRequest, IndexerStatusResponse,
+    MempoolTransactionsResponse, TopBalancesRequest, TopBalancesResponse,
+    TransactionDetailsResponse, TransactionsResponse,
 };
 use hex_data::HexData;
 use trees::{GetSubtreesByIndexResponse, GetTreestateResponse, SubtreeRpcData};
@@ -730,7 +731,8 @@ pub trait Rpc {
     ///
     /// # Parameters
     ///
-    /// - `request`: (object, optional) Cursor pagination and transaction filters.
+    /// - `request`: (object, optional) Cursor pagination, transaction filters,
+    ///   and inclusive block-height bounds.
     #[method(name = "gettransactions")]
     async fn get_transactions(
         &self,
@@ -748,7 +750,7 @@ pub trait Rpc {
     #[method(name = "getmempooltransactions")]
     async fn get_mempool_transactions(
         &self,
-        request: Option<GetTransactionsRequest>,
+        request: Option<GetMempoolTransactionsRequest>,
     ) -> Result<MempoolTransactionsResponse>;
 
     /// Returns complete explorer details for one transaction from the live
@@ -783,7 +785,8 @@ pub trait Rpc {
     ///
     /// # Parameters
     ///
-    /// - `request`: (object, required) Address and cursor pagination parameters.
+    /// - `request`: (object, required) Address, cursor pagination, and inclusive
+    ///   block-height bounds.
     #[method(name = "getaddresstransactions")]
     async fn get_address_transactions(
         &self,
@@ -3072,7 +3075,7 @@ where
 
     async fn get_mempool_transactions(
         &self,
-        request: Option<GetTransactionsRequest>,
+        request: Option<GetMempoolTransactionsRequest>,
     ) -> Result<MempoolTransactionsResponse> {
         self.explorer_get_mempool_transactions(request).await
     }

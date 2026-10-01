@@ -37,8 +37,9 @@ use super::{
         AddressSummary, AddressTransactionsResponse, AddressUtxosResponse, BlockDetails,
         BlocksResponse, ChartDataRequest, ChartDataResponse, ExplorerNetworkStatsResponse,
         GetAddressTransactionsRequest, GetAddressUtxosPageRequest, GetBlocksRequest,
-        GetTransactionsRequest, IndexerStatusResponse, MempoolTransactionsResponse,
-        TopBalancesRequest, TopBalancesResponse, TransactionDetailsResponse, TransactionsResponse,
+        GetMempoolTransactionsRequest, GetTransactionsRequest, IndexerStatusResponse,
+        MempoolTransactionsResponse, TopBalancesRequest, TopBalancesResponse,
+        TransactionDetailsResponse, TransactionsResponse,
     },
 };
 #[cfg(feature = "indexer")]
@@ -127,6 +128,7 @@ where
             let query = request
                 .transaction_query()
                 .map_error(server::error::LegacyCode::InvalidParameter)?;
+            let height_range = request.height_range();
 
             match transactions_page_from_state(
                 self.read_state.clone(),
@@ -134,6 +136,7 @@ where
                 request.limit,
                 request.cursor,
                 request.direction,
+                height_range,
             )
             .await
             {
@@ -149,7 +152,7 @@ where
 
     pub(in crate::methods) async fn explorer_get_mempool_transactions(
         &self,
-        request: Option<GetTransactionsRequest>,
+        request: Option<GetMempoolTransactionsRequest>,
     ) -> Result<MempoolTransactionsResponse> {
         let response = call_service(
             self.mempool.clone(),
@@ -263,6 +266,7 @@ where
         {
             let address = explorer_transparent_address(&self.network, &request.address)
                 .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
+            let height_range = request.height_range();
 
             match address_transactions_page_from_state(
                 self.read_state.clone(),
@@ -271,13 +275,15 @@ where
                 request.limit,
                 request.cursor,
                 request.direction,
+                height_range,
             )
             .await
             {
                 Ok(response) => Ok(response),
-                Err(error @ zakura_indexer::Error::InvalidCursor(_)) => {
-                    Err(error).map_error(server::error::LegacyCode::InvalidParameter)
-                }
+                Err(
+                    error @ (zakura_indexer::Error::InvalidCursor(_)
+                    | zakura_indexer::Error::InvalidQuery(_)),
+                ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
                 Err(error) => Err(error).map_misc_error(),
             }
         }

@@ -1,10 +1,13 @@
 //! Address summary reads and newest-first canonical transaction history.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::RangeInclusive, sync::Arc};
 
 use tower::ServiceExt;
 use zakura_chain::{
-    block::Hash, parameters::Network, transaction::Transaction, transparent::Address,
+    block::{Hash, Height},
+    parameters::Network,
+    transaction::Transaction,
+    transparent::Address,
 };
 use zakura_state::{
     ExplorerPageDirection, ExplorerReadRequest, ExplorerReadResponse, ExplorerTransactionSummary,
@@ -12,6 +15,7 @@ use zakura_state::{
 };
 
 use crate::{
+    height_range::TransactionHeightRange,
     models::{TransactionPosition, TransactionRecord},
     transactions::{shielded_flow, shielded_pool, transaction_kind},
     types::{
@@ -44,6 +48,7 @@ where
         1,
         None,
         ExplorerPageDirection::Older,
+        TransactionHeightRange::new(Height::MIN.0..=Height::MAX.0)?,
     )
     .await?;
     let indexed_tip = page.best_tip;
@@ -115,6 +120,7 @@ pub async fn address_transactions_page_from_state<State>(
     limit: Option<u32>,
     cursor: Option<String>,
     direction: PageDirection,
+    height_range: RangeInclusive<u32>,
 ) -> Result<AddressTransactionsResponse, Error>
 where
     State: ReadState,
@@ -122,6 +128,7 @@ where
     let limit = limit
         .unwrap_or(DEFAULT_QUERY_LIMIT)
         .clamp(1, MAX_QUERY_LIMIT);
+    let height_range = TransactionHeightRange::new(height_range)?;
     let cursor = cursor
         .map(|encoded| AddressTransactionCursor::decode(&encoded))
         .transpose()?;
@@ -131,9 +138,9 @@ where
         ));
     }
     if let Some(cursor) = cursor {
-        if cursor.address != address {
+        if !cursor.matches(address, height_range) {
             return Err(Error::InvalidCursor(
-                "address cursor was created for a different address".to_string(),
+                "address cursor was created for a different address or height range".to_string(),
             ));
         }
         let response = read_state
@@ -170,6 +177,7 @@ where
             )
         }),
         state_direction,
+        height_range,
     )
     .await?;
     if !page.cursor_valid {
@@ -214,13 +222,13 @@ where
         .last()
         .filter(|_| has_next)
         .map(|(position, block_hash, _)| {
-            AddressTransactionCursor::new(address, *position, *block_hash).encode()
+            AddressTransactionCursor::new(address, *position, *block_hash, height_range).encode()
         });
     let prev_cursor = matched
         .first()
         .filter(|_| has_prev)
         .map(|(position, block_hash, _)| {
-            AddressTransactionCursor::new(address, *position, *block_hash).encode()
+            AddressTransactionCursor::new(address, *position, *block_hash, height_range).encode()
         });
 
     Ok(AddressTransactionsResponse {
@@ -242,6 +250,7 @@ async fn load_address_page<State>(
     limit: u32,
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
+    height_range: TransactionHeightRange,
 ) -> Result<zakura_state::ExplorerAddressPage, Error>
 where
     State: ReadState,
@@ -252,6 +261,7 @@ where
             limit,
             cursor,
             direction,
+            height_range: height_range.from..=height_range.to,
         }))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;

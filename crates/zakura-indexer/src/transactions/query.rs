@@ -1,5 +1,7 @@
 //! Canonical newest-first transaction queries over materialized filter indexes.
 
+use std::ops::RangeInclusive;
+
 use tower::ServiceExt;
 use zakura_chain::{block::Hash, transaction::Hash as TransactionHash};
 use zakura_state::{
@@ -9,6 +11,7 @@ use zakura_state::{
 };
 
 use crate::{
+    height_range::TransactionHeightRange,
     models::{TransactionPosition, TransactionRecord},
     types::{PageDirection, TransactionListItem, TransactionsPagination, TransactionsResponse},
     Error,
@@ -32,11 +35,13 @@ pub async fn transactions_page_from_state<S>(
     limit: Option<u32>,
     cursor: Option<String>,
     direction: PageDirection,
+    height_range: RangeInclusive<u32>,
 ) -> Result<TransactionsResponse, Error>
 where
     S: ReadState,
 {
     let query = query.validate().map_err(Error::InvalidQuery)?;
+    let height_range = TransactionHeightRange::new(height_range)?;
     let limit = limit
         .unwrap_or(DEFAULT_QUERY_LIMIT)
         .clamp(1, MAX_QUERY_LIMIT);
@@ -49,7 +54,7 @@ where
         ));
     }
     if let Some(cursor) = cursor {
-        if !cursor.matches(query) {
+        if !cursor.matches(query, height_range) {
             return Err(Error::InvalidCursor(
                 "transaction cursor was created for different filters".to_string(),
             ));
@@ -90,6 +95,7 @@ where
                     )
                 }),
                 direction: state_direction,
+                height_range: height_range.from..=height_range.to,
             },
         ))
         .await
@@ -130,11 +136,15 @@ where
     let next_cursor = positions
         .last()
         .filter(|_| has_next)
-        .map(|(position, hash)| TransactionCursor::new(*position, *hash, query).encode());
+        .map(|(position, hash)| {
+            TransactionCursor::new(*position, *hash, query, height_range).encode()
+        });
     let prev_cursor = positions
         .first()
         .filter(|_| has_prev)
-        .map(|(position, hash)| TransactionCursor::new(*position, *hash, query).encode());
+        .map(|(position, hash)| {
+            TransactionCursor::new(*position, *hash, query, height_range).encode()
+        });
 
     Ok(TransactionsResponse {
         transactions,

@@ -168,7 +168,7 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     deprecated: false,
 },
 "gettransactions" => openrpsee::openrpc::RpcMethod {
-    description: "Returns a cursor-paginated, filterable page of canonical transactions\nfrom Zakura\'s in-process RocksDB index.\n\nmethod: post\ntags: transaction\n\n# Parameters\n\n- `request`: (object, optional) Cursor pagination and transaction filters.\n",
+    description: "Returns a cursor-paginated, filterable page of canonical transactions\nfrom Zakura\'s in-process RocksDB index.\n\nmethod: post\ntags: transaction\n\n# Parameters\n\n- `request`: (object, optional) Cursor pagination, transaction filters,\n  and inclusive block-height bounds.\n",
     params: |_g| vec![
         _g.param::<GetTransactionsRequest>("request", crate::methods::PARAM_REQUEST_DESC, false),
     ],
@@ -178,7 +178,7 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
 "getmempooltransactions" => openrpsee::openrpc::RpcMethod {
     description: "Returns a cursor-paginated page of transactions currently in this node\'s mempool.\n\nmethod: post\ntags: mempool\n\n# Parameters\n\n- `request`: (object, optional) Cursor pagination and transaction filters.\n",
     params: |_g| vec![
-        _g.param::<GetTransactionsRequest>("request", crate::methods::PARAM_REQUEST_DESC, false),
+        _g.param::<GetMempoolTransactionsRequest>("request", crate::methods::PARAM_REQUEST_DESC, false),
     ],
     result: |g| g.result::<openrpsee::openrpc::ResultType>("getmempooltransactions_result"),
     deprecated: false,
@@ -200,7 +200,7 @@ pub static METHODS: ::phf::Map<&str, openrpsee::openrpc::RpcMethod> = ::phf::phf
     deprecated: false,
 },
 "getaddresstransactions" => openrpsee::openrpc::RpcMethod {
-    description: "Returns a cursor-paginated page of canonical transactions involving one\ntransparent address.\n\nmethod: post\ntags: address\n\n# Parameters\n\n- `request`: (object, required) Address and cursor pagination parameters.\n",
+    description: "Returns a cursor-paginated page of canonical transactions involving one\ntransparent address.\n\nmethod: post\ntags: address\n\n# Parameters\n\n- `request`: (object, required) Address, cursor pagination, and inclusive\n  block-height bounds.\n",
     params: |_g| vec![
         _g.param::<GetAddressTransactionsRequest>("request", crate::methods::PARAM_REQUEST_DESC, true),
     ],

@@ -16,7 +16,7 @@ pub use mempool::{
 };
 pub use requests::{
     GetAddressTransactionsRequest, GetAddressUtxosPageRequest, GetBlocksRequest,
-    GetTransactionsRequest,
+    GetMempoolTransactionsRequest, GetTransactionsRequest,
 };
 #[cfg(feature = "indexer")]
 pub(super) use stats::{

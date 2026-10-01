@@ -335,14 +335,25 @@ impl ZakuraDb {
         address: transparent::Address,
         cursor: Option<TransactionLocation>,
         direction: crate::ExplorerPageDirection,
+        from_height: Height,
+        to_height: Height,
         limit: usize,
     ) -> Vec<TransactionLocation> {
         let Some(address_location) = self.address_location(&address) else {
             return Vec::new();
         };
+        if limit == 0 || from_height > to_height {
+            return Vec::new();
+        }
         let column = self.db.cf_handle("tx_loc_by_transparent_addr_loc").unwrap();
-        let minimum = AddressTransaction::new(address_location, TransactionLocation::MIN);
-        let maximum = AddressTransaction::new(address_location, TransactionLocation::MAX);
+        let minimum = AddressTransaction::new(
+            address_location,
+            TransactionLocation::min_for_height(from_height),
+        );
+        let maximum = AddressTransaction::new(
+            address_location,
+            TransactionLocation::max_for_height(to_height),
+        );
 
         match direction {
             crate::ExplorerPageDirection::Older => {
