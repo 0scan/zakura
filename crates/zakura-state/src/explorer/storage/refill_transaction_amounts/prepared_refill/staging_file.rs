@@ -365,6 +365,31 @@ impl PreparedRefillReader {
         self.manifest
     }
 
+    /// Position the reader after a validated prefix of records already committed to RocksDB.
+    pub(super) fn seek_to_record(
+        &mut self,
+        resumed_records: u64,
+    ) -> Result<(), RefillTransactionAmountsError> {
+        if resumed_records > self.manifest.record_count {
+            return Err(RefillTransactionAmountsError::PreparedImportCountMismatch {
+                resumed_records,
+                prepared_records: self.manifest.record_count,
+            });
+        }
+
+        let resume_offset = entry_offset(&self.path, resumed_records)?;
+        self.reader
+            .seek(SeekFrom::Start(resume_offset))
+            .map_err(|source| file_io_error(&self.path, source))?;
+        self.remaining_records = self
+            .manifest
+            .record_count
+            .checked_sub(resumed_records)
+            .expect("resumed record count was checked against the manifest");
+
+        Ok(())
+    }
+
     pub(super) fn read_batch(
         &mut self,
         batch_size: usize,
@@ -388,6 +413,29 @@ impl PreparedRefillReader {
     pub(super) fn is_finished(&self) -> bool {
         self.remaining_records == 0
     }
+
+    pub(super) fn location_at(
+        &mut self,
+        record_index: u64,
+    ) -> Result<TransactionLocation, RefillTransactionAmountsError> {
+        let record_offset = entry_offset(&self.path, record_index)?;
+        self.reader
+            .seek(SeekFrom::Start(record_offset))
+            .map_err(|source| file_io_error(&self.path, source))?;
+        let mut location_bytes = [0; TRANSACTION_LOCATION_BYTES];
+        self.reader
+            .read_exact(&mut location_bytes)
+            .map_err(|source| file_io_error(&self.path, source))?;
+
+        Ok(TransactionLocation::from_bytes(location_bytes))
+    }
+}
+
+fn entry_offset(path: &Path, record_index: u64) -> Result<u64, RefillTransactionAmountsError> {
+    record_index
+        .checked_mul(ENTRY_BYTES)
+        .and_then(|entry_bytes| HEADER_BYTES.checked_add(entry_bytes))
+        .ok_or_else(|| invalid_file_error(path, "prepared record offset overflows u64"))
 }
 
 fn write_header(

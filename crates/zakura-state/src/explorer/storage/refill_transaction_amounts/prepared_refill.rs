@@ -1,5 +1,6 @@
 //! Two-phase refill workflow that moves expensive derivation outside node downtime.
 
+mod import;
 mod staging_file;
 
 use std::{
@@ -13,16 +14,17 @@ use zakura_chain::{
 };
 
 use crate::{
-    service::finalized_state::{DiskWriteBatch, TransactionLocation, WriteDisk, ZakuraDb},
+    service::finalized_state::{TransactionLocation, ZakuraDb},
     Config,
 };
 
 use super::{
-    calculate_refill_records, count_as_u64, explorer_schema_is_current, open_refill_database,
+    calculate_refill_records, explorer_schema_is_current, open_refill_database,
     refill_transaction_amounts_from, refill_worker_pool, validate_refill_options,
     RefillTransactionAmountsError, RefillTransactionAmountsOptions,
-    RefillTransactionAmountsSummary, EXPLORER_TRANSACTION_META_BY_LOC,
+    RefillTransactionAmountsSummary,
 };
+use import::import_prepared_records;
 use staging_file::{partial_path_for, PreparedRefillReader, PreparedRefillWriter};
 
 /// Outcome of preparing transaction metadata while the node remains online.
@@ -43,8 +45,10 @@ pub struct PreparedTransactionAmountRefillSummary {
 /// Outcome of importing a prepared artifact and calculating its missing tail.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AppliedPreparedTransactionAmountRefillSummary {
-    /// Records imported from the prepared artifact.
+    /// Records newly imported from the prepared artifact during this invocation.
     pub imported_records: u64,
+    /// Records recovered from an earlier interrupted artifact import.
+    pub resumed_records: u64,
     /// Records calculated from blocks committed after the artifact snapshot.
     pub tail_refill: RefillTransactionAmountsSummary,
     /// Whole seconds spent validating, importing, and completing the refill.
@@ -152,7 +156,8 @@ fn prepare_transaction_amount_refill_from(
 ///
 /// This function opens the primary RocksDB instance, so the node must be fully stopped first. The
 /// schema marker remains at version one after any interrupted or failed run, making the operation
-/// safe to retry with the same artifact.
+/// safe to retry with the same artifact. Retry resumes after the contiguous artifact prefix already
+/// committed as version-two records.
 pub fn apply_prepared_transaction_amount_refill(
     config: Config,
     network: &Network,
@@ -172,12 +177,13 @@ pub fn apply_prepared_transaction_amount_refill(
     if explorer_schema_is_current(&db)? {
         return Ok(AppliedPreparedTransactionAmountRefillSummary {
             imported_records: 0,
+            resumed_records: 0,
             tail_refill: completed_noop_summary(started),
             elapsed_seconds: started.elapsed().as_secs(),
         });
     }
     validate_source_tip(&db, manifest.source_tip_height, manifest.source_tip_hash)?;
-    let imported_records = import_prepared_records(&db, &mut reader, options.batch_size)?;
+    let import = import_prepared_records(&db, &mut reader, options.batch_size)?;
     db.flush()?;
     drop(db);
 
@@ -191,7 +197,8 @@ pub fn apply_prepared_transaction_amount_refill(
     )?;
 
     Ok(AppliedPreparedTransactionAmountRefillSummary {
-        imported_records,
+        imported_records: import.imported_records,
+        resumed_records: import.resumed_records,
         tail_refill,
         elapsed_seconds: started.elapsed().as_secs(),
     })
@@ -212,33 +219,6 @@ fn validate_source_tip(
     }
 
     Ok(())
-}
-
-fn import_prepared_records(
-    db: &ZakuraDb,
-    reader: &mut PreparedRefillReader,
-    batch_size: usize,
-) -> Result<u64, RefillTransactionAmountsError> {
-    let metadata_handle = db
-        .disk_db()
-        .cf_handle(EXPLORER_TRANSACTION_META_BY_LOC)
-        .expect("explorer transaction metadata column family is registered");
-    let mut imported_records = 0_u64;
-    while !reader.is_finished() {
-        let entries = reader.read_batch(batch_size)?;
-        let entry_count = count_as_u64(entries.len());
-        let mut batch = DiskWriteBatch::new();
-        for entry in entries {
-            batch.zs_insert(&metadata_handle, entry.location, entry.record);
-        }
-        db.write_batch(batch)?;
-        imported_records = imported_records
-            .checked_add(entry_count)
-            .expect("transaction count fits in u64");
-        tracing::info!(imported_records, "imported prepared transaction metadata");
-    }
-
-    Ok(imported_records)
 }
 
 fn completed_noop_summary(started: Instant) -> RefillTransactionAmountsSummary {

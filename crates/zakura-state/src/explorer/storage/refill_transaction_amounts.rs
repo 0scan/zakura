@@ -241,6 +241,21 @@ pub enum RefillTransactionAmountsError {
         database_hash: Option<zakura_chain::block::Hash>,
     },
 
+    /// The database claims a larger imported prefix than the artifact contains.
+    #[error(
+        "prepared refill import progress has {resumed_records} records, but the artifact contains {prepared_records}"
+    )]
+    PreparedImportCountMismatch {
+        /// Contiguous version-two prefix found in RocksDB.
+        resumed_records: u64,
+        /// Total record count encoded in the artifact.
+        prepared_records: u64,
+    },
+
+    /// An artifact record has no corresponding metadata row in the target database.
+    #[error("prepared refill target record is missing at {0:?}")]
+    MissingPreparedImportRecord(TransactionLocation),
+
     /// Preparing an artifact requires a non-empty finalized chain.
     #[error("cannot prepare a transaction refill artifact from an empty database")]
     EmptyDatabase,
@@ -810,6 +825,19 @@ mod tests {
         assert_eq!(resumed.prepared_records, 2);
         assert_eq!(resumed.resumed_records, 1);
 
+        let interrupted_apply = refill_transaction_amounts(
+            fixture.config.clone(),
+            &fixture.network,
+            RefillTransactionAmountsOptions {
+                limit: Some(1),
+                dry_run: false,
+                ..Default::default()
+            },
+        )
+        .expect("the first prepared record is simulated as already imported");
+        assert_eq!(interrupted_apply.refilled_records, 1);
+        assert!(!interrupted_apply.schema_updated);
+
         let tail_location = TransactionLocation::from_usize(Height(3), 0);
         let tail_transaction = Transaction::V1 {
             inputs: vec![Input::Coinbase {
@@ -856,7 +884,8 @@ mod tests {
             &artifact_path,
         )
         .expect("prepared metadata and its missing tail are applied");
-        assert_eq!(applied.imported_records, 2);
+        assert_eq!(applied.imported_records, 1);
+        assert_eq!(applied.resumed_records, 1);
         assert_eq!(applied.tail_refill.refilled_records, 1);
         assert!(applied.tail_refill.scan_complete);
         assert!(applied.tail_refill.schema_updated);

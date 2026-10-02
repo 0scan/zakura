@@ -203,6 +203,7 @@ fn print_prepared_summary(summary: &PreparedTransactionAmountRefillSummary, outp
 fn print_applied_summary(summary: &AppliedPreparedTransactionAmountRefillSummary) {
     println!("applied prepared transaction metadata refill:");
     println!("  imported records: {}", summary.imported_records);
+    println!("  resumed records: {}", summary.resumed_records);
     println!(
         "  calculated tail records: {}",
         summary.tail_refill.refilled_records
