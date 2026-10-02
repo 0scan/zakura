@@ -74,6 +74,7 @@ mod tests {
         block::{genesis::regtest_genesis_block, Height},
         parameters::{testnet::RegtestParameters, Network},
         serialization::ZcashSerialize,
+        transaction::TransactionValueEndpoint,
     };
     use zakura_state::{
         ExplorerReadRequest, ExplorerReadResponse, ExplorerTransactionRecord,
@@ -101,6 +102,11 @@ mod tests {
             .iter()
             .map(|output| output.value().zatoshis())
             .sum();
+        let primary_to = transaction
+            .outputs()
+            .iter()
+            .find_map(|output| output.address(&network))
+            .map(TransactionValueEndpoint::Transparent);
 
         let read_state = service_fn(move |request: ReadRequest| {
             let transaction = transaction.clone();
@@ -141,6 +147,8 @@ mod tests {
                                     orchard_action_count: 0,
                                     ironwood_action_count: 0,
                                     transparent_output_total_zat,
+                                    primary_from: Some(TransactionValueEndpoint::Coinbase),
+                                    primary_to,
                                 },
                             },
                         )))
@@ -183,6 +191,8 @@ mod tests {
         assert_eq!(json["txid"], txid.to_string());
         assert_eq!(json["status"], "finalized");
         assert_eq!(json["tx_index"], 0);
+        assert_eq!(json["primary_from"]["type"], "coinbase");
+        assert!(json["primary_from"].get("address").is_none());
         assert!(json.get("transaction_index").is_none());
         assert!(json.get("flow_amount_zat").is_some());
         assert!(json.get("amount_zat").is_none());

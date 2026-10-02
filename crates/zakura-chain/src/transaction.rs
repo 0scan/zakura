@@ -13,6 +13,7 @@ mod serialize;
 mod sighash;
 mod txid;
 mod unmined;
+mod value_endpoints;
 pub(crate) mod zip244;
 
 #[cfg(any(test, feature = "proptest-impl"))]
@@ -35,6 +36,9 @@ pub use serialize::{
 pub use sighash::{HashType, SigHash, SigHasher};
 pub use unmined::{
     zip317, UnminedTx, UnminedTxId, VerifiedUnminedTx, MEMPOOL_TRANSACTION_COST_THRESHOLD,
+};
+pub use value_endpoints::{
+    primary_value_endpoints, PrimaryValueEndpointsError, TransactionValueEndpoint,
 };
 use zcash_protocol::consensus;
 

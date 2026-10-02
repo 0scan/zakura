@@ -3,8 +3,8 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 use zakura_indexer::{
-    ShieldedFlow, ShieldedPool, TransactionData, TransactionDetails, TransactionKind,
-    TransactionStatus, TransactionsPagination,
+    ShieldedFlow, ShieldedPool, TransactionData, TransactionDetails, TransactionEndpoint,
+    TransactionKind, TransactionStatus, TransactionsPagination,
 };
 
 /// A compact pending transaction summary for mempool list views.
@@ -30,6 +30,10 @@ pub struct MempoolTransactionListItem {
     pub flow_amount_zat: Option<String>,
     /// Exact transaction fee in zatoshis.
     pub fee: String,
+    /// Representative source with the largest observable value contribution.
+    pub primary_from: Option<TransactionEndpoint>,
+    /// Representative destination receiving the largest observable value.
+    pub primary_to: Option<TransactionEndpoint>,
     /// Number of transparent inputs.
     pub vin_count: u32,
     /// Number of transparent outputs.

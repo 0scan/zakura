@@ -23,8 +23,8 @@ pub use error::Error;
 #[cfg(feature = "state-index")]
 pub use stats::{chart_data_from_state, stats_from_state};
 pub use transactions::{
-    classify_unmined_transaction, AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter,
-    TransactionKindFilter, TransactionQuery,
+    classify_unmined_transaction, primary_transaction_endpoints, AmountFilter, ShieldedFlowFilter,
+    ShieldedPoolFilter, TransactionKindFilter, TransactionQuery,
 };
 #[cfg(feature = "state-index")]
 pub use transactions::{transaction_details_from_state, transactions_page_from_state};
@@ -36,6 +36,7 @@ pub use types::{
     ChainTotals, ChartDataEntry, ChartDataRequest, ChartDataResponse, IndexerStats, PageDirection,
     RollingDayStats, ShieldedFlow, ShieldedPool, TopBalanceEntry, TopBalancesPagination,
     TopBalancesRequest, TopBalancesResponse, TopBalancesSummary, TransactionClassification,
-    TransactionData, TransactionDetails, TransactionKind, TransactionListItem, TransactionStatus,
-    TransactionsPagination, TransactionsResponse, TreeSize, ValuePoolBalance,
+    TransactionData, TransactionDetails, TransactionEndpoint, TransactionEndpointType,
+    TransactionKind, TransactionListItem, TransactionStatus, TransactionsPagination,
+    TransactionsResponse, TreeSize, ValuePoolBalance,
 };

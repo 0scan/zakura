@@ -1,6 +1,6 @@
 //! Compact transaction facts used while building explorer responses.
 
-use zakura_chain::block::Height;
+use zakura_chain::{block::Height, transaction::TransactionValueEndpoint};
 #[cfg(feature = "state-index")]
 use zakura_state::{ExplorerTransactionRecord, TransactionLocation};
 
@@ -29,6 +29,8 @@ pub(crate) struct TransactionRecord {
     pub(crate) orchard_action_count: u32,
     pub(crate) ironwood_action_count: u32,
     pub(crate) transparent_output_total_zat: i64,
+    pub(crate) primary_from: Option<TransactionValueEndpoint>,
+    pub(crate) primary_to: Option<TransactionValueEndpoint>,
 }
 
 #[cfg(feature = "state-index")]
@@ -56,6 +58,8 @@ impl TransactionRecord {
             orchard_action_count: record.orchard_action_count,
             ironwood_action_count: record.ironwood_action_count,
             transparent_output_total_zat: record.transparent_output_total_zat,
+            primary_from: record.primary_from,
+            primary_to: record.primary_to,
         }
     }
 }

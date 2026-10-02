@@ -113,6 +113,7 @@ pub fn explorer_block_summaries(
     db: &ZakuraDb,
     heights: &[zakura_chain::block::Height],
 ) -> Vec<Option<ExplorerBlockSummary>> {
+    let network = db.network();
     heights
         .iter()
         .map(|height| {
@@ -131,6 +132,7 @@ pub fn explorer_block_summaries(
                         explorer_transaction_record_with_ordered_utxos(
                             transaction,
                             index,
+                            &network,
                             &contextual.spent_outputs,
                         )
                         .fee_zat
@@ -243,6 +245,7 @@ pub fn explorer_transaction_page(
     if let Some(chain) = chain {
         transactions.extend(non_finalized_summaries(
             &chain,
+            &db.network(),
             query,
             cursor,
             direction,
@@ -749,6 +752,7 @@ fn explorer_transaction_summary_at_location(
             let record = explorer_transaction_record_with_ordered_utxos(
                 transaction,
                 location.index.as_usize(),
+                &db.network(),
                 &block.spent_outputs,
             );
             return Some(ExplorerTransactionSummary {
@@ -813,6 +817,7 @@ fn finalized_summaries(
 
 fn non_finalized_summaries(
     chain: &Chain,
+    network: &zakura_chain::parameters::Network,
     query: ExplorerTransactionQuery,
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
@@ -845,6 +850,7 @@ fn non_finalized_summaries(
             let record = explorer_transaction_record_with_ordered_utxos(
                 transaction,
                 transaction_index,
+                network,
                 &block.spent_outputs,
             );
             if !query.matches(location, record) {

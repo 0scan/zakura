@@ -24,6 +24,7 @@ use super::{
     },
     cursor::TransactionCursor,
     filter::{TransactionKindFilter, TransactionQuery},
+    response_endpoint,
 };
 
 const DEFAULT_QUERY_LIMIT: u32 = 25;
@@ -212,6 +213,8 @@ fn transaction_list_item(
         flow: shielded_flow(&record)?,
         flow_amount_zat: flow_amount_zat.map(|amount| amount.to_string()),
         fee: record.fee_zat.to_string(),
+        primary_from: response_endpoint(record.primary_from),
+        primary_to: response_endpoint(record.primary_to),
         vin_count: record.transparent_input_count,
         vout_count: record.transparent_output_count,
         total_input: transparent_input_total(&record)?.to_string(),

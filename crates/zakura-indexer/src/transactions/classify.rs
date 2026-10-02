@@ -91,6 +91,8 @@ pub fn classify_unmined_transaction(
             "Ironwood action count",
         )?,
         transparent_output_total_zat: total_output,
+        primary_from: None,
+        primary_to: None,
     };
 
     Ok(TransactionClassification {
@@ -265,6 +267,8 @@ mod tests {
             orchard_action_count: 0,
             ironwood_action_count: 0,
             transparent_output_total_zat: 0,
+            primary_from: None,
+            primary_to: None,
         }
     }
 }

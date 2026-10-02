@@ -169,7 +169,12 @@ where
         };
         let request = request.unwrap_or_default();
 
-        match mempool::transactions_page(transactions, &transaction_dependencies, &request) {
+        match mempool::transactions_page(
+            &self.network,
+            transactions,
+            &transaction_dependencies,
+            &request,
+        ) {
             Ok(response) => Ok(response),
             Err(
                 error @ (zakura_indexer::Error::InvalidCursor(_)

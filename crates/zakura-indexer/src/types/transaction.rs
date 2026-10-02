@@ -57,6 +57,36 @@ pub enum ShieldedPool {
     Mixed,
 }
 
+/// The kind of a representative transaction source or destination.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionEndpointType {
+    /// Newly issued value from a block's coinbase transaction.
+    Coinbase,
+    /// A public transparent address.
+    Transparent,
+    /// The Sprout shielded pool.
+    Sprout,
+    /// The Sapling shielded pool.
+    Sapling,
+    /// The Orchard shielded pool.
+    Orchard,
+    /// The Ironwood shielded pool.
+    Ironwood,
+}
+
+/// One representative transaction source or destination.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct TransactionEndpoint {
+    /// Endpoint kind.
+    #[serde(rename = "type")]
+    pub endpoint_type: TransactionEndpointType,
+
+    /// Transparent address, present only when `type` is `transparent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
 /// Classification derived from transaction components and public value balance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TransactionClassification {
@@ -114,6 +144,12 @@ pub struct TransactionListItem {
 
     /// Exact transaction fee in zatoshis.
     pub fee: String,
+
+    /// Representative source with the largest observable value contribution.
+    pub primary_from: Option<TransactionEndpoint>,
+
+    /// Representative destination receiving the largest observable value.
+    pub primary_to: Option<TransactionEndpoint>,
 
     /// Number of non-coinbase transparent inputs.
     pub vin_count: u32,

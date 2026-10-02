@@ -6,6 +6,7 @@ use bincode::Options;
 use serde::{de::DeserializeOwned, Serialize};
 use zakura_chain::{
     parameters::NetworkKind,
+    transaction::TransactionValueEndpoint,
     transparent::{self, Address},
 };
 
@@ -215,6 +216,8 @@ pub struct ExplorerTransactionRecord {
     pub orchard_action_count: u32,
     pub ironwood_action_count: u32,
     pub transparent_output_total_zat: i64,
+    pub primary_from: Option<TransactionValueEndpoint>,
+    pub primary_to: Option<TransactionValueEndpoint>,
 }
 
 /// Compact canonical activity positions for one transparent address.
@@ -340,7 +343,8 @@ pub struct ExplorerShieldedClassLocation {
     pub location: TransactionLocation,
 }
 
-const EXPLORER_TRANSACTION_RECORD_BYTES: usize = 80;
+const EXPLORER_TRANSACTION_ENDPOINT_BYTES: usize = 22;
+const EXPLORER_TRANSACTION_RECORD_BYTES: usize = 124;
 const EXPLORER_ADDRESS_RECORD_BYTES: usize = 24;
 
 impl IntoDisk for ExplorerAddressRecord {
@@ -409,6 +413,16 @@ impl IntoDisk for ExplorerTransactionRecord {
             &mut offset,
             &self.transparent_output_total_zat.to_be_bytes(),
         );
+        put(
+            &mut bytes,
+            &mut offset,
+            &transaction_endpoint_bytes(self.primary_from),
+        );
+        put(
+            &mut bytes,
+            &mut offset,
+            &transaction_endpoint_bytes(self.primary_to),
+        );
         debug_assert_eq!(offset, EXPLORER_TRANSACTION_RECORD_BYTES);
         bytes
     }
@@ -434,7 +448,45 @@ impl FromDisk for ExplorerTransactionRecord {
             orchard_action_count: u32::from_be_bytes(take(bytes, &mut offset)),
             ironwood_action_count: u32::from_be_bytes(take(bytes, &mut offset)),
             transparent_output_total_zat: i64::from_be_bytes(take(bytes, &mut offset)),
+            primary_from: transaction_endpoint_from_bytes(take(bytes, &mut offset)),
+            primary_to: transaction_endpoint_from_bytes(take(bytes, &mut offset)),
         }
+    }
+}
+
+fn transaction_endpoint_bytes(
+    endpoint: Option<TransactionValueEndpoint>,
+) -> [u8; EXPLORER_TRANSACTION_ENDPOINT_BYTES] {
+    let mut bytes = [0; EXPLORER_TRANSACTION_ENDPOINT_BYTES];
+    bytes[0] = match endpoint {
+        None => 0,
+        Some(TransactionValueEndpoint::Coinbase) => 1,
+        Some(TransactionValueEndpoint::Transparent(address)) => {
+            bytes[1..].copy_from_slice(&address.as_bytes());
+            2
+        }
+        Some(TransactionValueEndpoint::Sprout) => 3,
+        Some(TransactionValueEndpoint::Sapling) => 4,
+        Some(TransactionValueEndpoint::Orchard) => 5,
+        Some(TransactionValueEndpoint::Ironwood) => 6,
+    };
+    bytes
+}
+
+fn transaction_endpoint_from_bytes(
+    bytes: [u8; EXPLORER_TRANSACTION_ENDPOINT_BYTES],
+) -> Option<TransactionValueEndpoint> {
+    match bytes[0] {
+        0 => None,
+        1 => Some(TransactionValueEndpoint::Coinbase),
+        2 => Some(TransactionValueEndpoint::Transparent(
+            address_from_disk_bytes(&bytes[1..]),
+        )),
+        3 => Some(TransactionValueEndpoint::Sprout),
+        4 => Some(TransactionValueEndpoint::Sapling),
+        5 => Some(TransactionValueEndpoint::Orchard),
+        6 => Some(TransactionValueEndpoint::Ironwood),
+        tag => panic!("invalid explorer transaction endpoint tag {tag}"),
     }
 }
 
@@ -562,6 +614,10 @@ mod tests {
             orchard_action_count: 10,
             ironwood_action_count: 11,
             transparent_output_total_zat: 12,
+            primary_from: Some(TransactionValueEndpoint::Transparent(
+                Address::from_pub_key_hash(NetworkKind::Mainnet, [13; 20]),
+            )),
+            primary_to: Some(TransactionValueEndpoint::Ironwood),
         };
 
         assert_eq!(
