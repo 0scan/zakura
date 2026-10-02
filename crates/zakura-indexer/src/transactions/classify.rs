@@ -175,6 +175,7 @@ pub(super) fn shielded_value_balance(record: &TransactionRecord) -> Result<i64, 
     })
 }
 
+#[cfg(any(feature = "state-index", test))]
 pub(super) fn transparent_input_total(record: &TransactionRecord) -> Result<i64, Error> {
     if transaction_kind(record) == TransactionKind::Coinbase {
         return Ok(0);

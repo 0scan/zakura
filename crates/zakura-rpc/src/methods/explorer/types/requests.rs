@@ -1,9 +1,11 @@
 //! Request types for explorer index JSON-RPC methods.
 
+#[cfg(any(feature = "indexer", test))]
 use std::ops::RangeInclusive;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+#[cfg(any(feature = "indexer", test))]
 use zakura_chain::block::Height;
 use zakura_indexer::{
     AmountFilter, PageDirection, ShieldedFlowFilter, ShieldedPoolFilter, TransactionKindFilter,
@@ -130,6 +132,7 @@ pub struct GetAddressUtxosPageRequest {
     pub direction: PageDirection,
 }
 
+#[cfg(any(feature = "indexer", test))]
 impl GetTransactionsRequest {
     /// Converts transport parameters into the indexer's validated query type.
     pub(crate) fn transaction_query(&self) -> Result<TransactionQuery, String> {
@@ -141,6 +144,7 @@ impl GetTransactionsRequest {
     }
 }
 
+#[cfg(any(feature = "indexer", test))]
 impl GetAddressTransactionsRequest {
     pub(crate) fn height_range(&self) -> RangeInclusive<u32> {
         self.from_height.unwrap_or(Height::MIN.0)..=self.to_height.unwrap_or(Height::MAX.0)

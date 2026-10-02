@@ -5,6 +5,7 @@ mod addresses;
 #[cfg(feature = "state-index")]
 mod blocks;
 mod error;
+#[cfg(any(feature = "state-index", test))]
 mod height_range;
 mod models;
 #[cfg(feature = "state-index")]
