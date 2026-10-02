@@ -1,12 +1,15 @@
 //! One-time offline refill for explorer transaction metadata.
 
-use std::{collections::HashMap, time::Instant};
+mod source_transactions;
 
+use std::time::Instant;
+
+use rayon::ThreadPoolBuilder;
 use semver::Version;
 use zakura_chain::{
     parameters::Network,
-    transaction::Transaction,
-    transparent::{OutPoint, Utxo},
+    transaction::{self, PrimaryValueEndpointsError, Transaction},
+    transparent::OutPoint,
 };
 
 use crate::{
@@ -15,16 +18,22 @@ use crate::{
     service::finalized_state::{
         DiskWriteBatch, RawBytes, TransactionLocation, TypedColumnFamily, WriteDisk, ZakuraDb,
     },
-    BoxError, Config, IntoDisk, StateInitError,
+    BoxError, Config, StateInitError,
 };
 
 use super::{
-    disk_format::{ExplorerSchemaVersion, EXPLORER_TRANSACTION_RECORD_BYTES},
-    explorer_transaction_record_with_utxos, EXPLORER_SCHEMA, EXPLORER_TRANSACTION_META_BY_LOC,
+    disk_format::{
+        ExplorerSchemaVersion, EXPLORER_TRANSACTION_RECORD_BYTES,
+        EXPLORER_TRANSACTION_RECORD_V1_BYTES,
+    },
+    EXPLORER_SCHEMA, EXPLORER_TRANSACTION_META_BY_LOC,
+};
+use source_transactions::{
+    upgrade_transaction_entries, LegacyTransactionEntry, SourceTransactionCache,
 };
 
 const EXPLORER_SCHEMA_V1: u32 = 1;
-const TRANSACTION_RECORD_V1_BYTES: usize = 72;
+const DEFAULT_SOURCE_CACHE_ENTRIES: usize = 10_000;
 const TRANSACTION_RECORD_V2_BYTES: usize = EXPLORER_TRANSACTION_RECORD_BYTES;
 
 /// Controls one explorer transaction amount refill run.
@@ -32,6 +41,10 @@ const TRANSACTION_RECORD_V2_BYTES: usize = EXPLORER_TRANSACTION_RECORD_BYTES;
 pub struct RefillTransactionAmountsOptions {
     /// Maximum number of upgraded records written in one RocksDB batch.
     pub batch_size: usize,
+    /// Number of worker threads used for historical transaction reads and endpoint derivation.
+    pub workers: usize,
+    /// Maximum number of decoded historical source transactions retained between batches.
+    pub source_cache_entries: usize,
     /// Optional record limit for benchmarking or partial refill runs.
     pub limit: Option<u64>,
     /// Calculate and validate records without writing them.
@@ -42,6 +55,8 @@ impl Default for RefillTransactionAmountsOptions {
     fn default() -> Self {
         Self {
             batch_size: 10_000,
+            workers: default_worker_count(),
+            source_cache_entries: DEFAULT_SOURCE_CACHE_ENTRIES,
             limit: None,
             dry_run: true,
         }
@@ -71,6 +86,14 @@ pub enum RefillTransactionAmountsError {
     /// A zero-sized write batch would never make progress.
     #[error("refill batch size must be greater than zero")]
     InvalidBatchSize,
+
+    /// A zero-sized worker pool cannot process refill batches.
+    #[error("refill worker count must be greater than zero")]
+    InvalidWorkerCount,
+
+    /// The dedicated refill worker pool could not be created.
+    #[error("could not create the refill worker pool")]
+    ThreadPoolBuild(#[from] rayon::ThreadPoolBuildError),
 
     /// The on-disk state format does not match this build.
     #[error(
@@ -129,14 +152,14 @@ pub enum RefillTransactionAmountsError {
     },
 
     /// A transparent input references a transaction without an indexed location.
-    #[error("spent transaction location is missing for {0:?}")]
-    MissingSpentTransactionLocation(OutPoint),
+    #[error("spent transaction location is missing for {0}")]
+    MissingSpentTransactionLocation(transaction::Hash),
 
     /// A transparent input references a transaction without retained raw bytes.
-    #[error("spent transaction is missing at {location:?} for {outpoint:?}")]
+    #[error("spent transaction {hash} is missing at {location:?}")]
     MissingSpentTransaction {
-        /// The input being resolved.
-        outpoint: OutPoint,
+        /// The transaction being resolved.
+        hash: transaction::Hash,
         /// The indexed location of its source transaction.
         location: TransactionLocation,
     },
@@ -144,6 +167,20 @@ pub enum RefillTransactionAmountsError {
     /// A transparent input references an output absent from its source transaction.
     #[error("spent output is missing for {0:?}")]
     MissingSpentOutput(OutPoint),
+
+    /// Transparent output values exceeded the supported integer range.
+    #[error("transparent output total exceeds i64 at {0:?}")]
+    OutputTotalOverflow(TransactionLocation),
+
+    /// Primary endpoints could not be derived from retained transaction data.
+    #[error("could not derive primary endpoints at {location:?}")]
+    PrimaryEndpoints {
+        /// Canonical transaction position.
+        location: TransactionLocation,
+        /// Endpoint derivation failure.
+        #[source]
+        source: PrimaryValueEndpointsError,
+    },
 
     /// RocksDB rejected a write or flush.
     #[error("RocksDB operation failed")]
@@ -162,6 +199,13 @@ pub fn refill_transaction_amounts(
     if options.batch_size == 0 {
         return Err(RefillTransactionAmountsError::InvalidBatchSize);
     }
+    if options.workers == 0 {
+        return Err(RefillTransactionAmountsError::InvalidWorkerCount);
+    }
+    let worker_pool = ThreadPoolBuilder::new()
+        .num_threads(options.workers)
+        .thread_name(|index| format!("explorer-refill-{index}"))
+        .build()?;
 
     check_format_version(&config, network)?;
     let started = Instant::now();
@@ -205,7 +249,7 @@ pub fn refill_transaction_amounts(
     let mut first_legacy_location = None;
     for (location, record) in metadata_cf.zs_forward_range_iter(..) {
         match record.raw_bytes().len() {
-            TRANSACTION_RECORD_V1_BYTES => {
+            EXPLORER_TRANSACTION_RECORD_V1_BYTES => {
                 first_legacy_location = Some(location);
                 break;
             }
@@ -245,9 +289,10 @@ pub fn refill_transaction_amounts(
         });
     };
 
-    let mut transaction_iter = transaction_cf
+    let mut metadata_iter = metadata_cf
         .zs_forward_range_iter(first_legacy_location..)
         .peekable();
+    let mut transaction_iter = transaction_cf.zs_forward_range_iter(first_legacy_location..);
     let mut batch = DiskWriteBatch::new();
     let metadata_handle = db
         .disk_db()
@@ -257,72 +302,93 @@ pub fn refill_transaction_amounts(
     let mut refilled_records = 0_u64;
     let mut pending_writes = 0_usize;
     let mut scan_complete = true;
+    let mut source_cache = SourceTransactionCache::new(options.source_cache_entries);
 
-    for (location, record) in metadata_cf.zs_forward_range_iter(first_legacy_location..) {
-        if options.limit.is_some_and(|limit| refilled_records >= limit) {
-            scan_complete = false;
-            break;
-        }
-
-        scanned_records = scanned_records
-            .checked_add(1)
-            .expect("transaction count fits in u64");
-        let (transaction_location, transaction) =
-            transaction_iter
-                .next()
-                .ok_or(RefillTransactionAmountsError::MissingRawTransaction(
-                    location,
-                ))?;
-        if transaction_location != location {
-            return Err(RefillTransactionAmountsError::LocationMismatch {
-                metadata: location,
-                transaction: transaction_location,
-            });
-        }
-
-        match record.raw_bytes().len() {
-            TRANSACTION_RECORD_V2_BYTES => {
-                already_refilled_records = already_refilled_records
-                    .checked_add(1)
-                    .expect("transaction count fits in u64");
+    while metadata_iter.peek().is_some() {
+        let mut legacy_entries = Vec::with_capacity(options.batch_size);
+        while legacy_entries.len() < options.batch_size {
+            if options.limit.is_some_and(|limit| {
+                refilled_records
+                    .checked_add(
+                        u64::try_from(legacy_entries.len())
+                            .expect("in-memory refill batch length fits in u64"),
+                    )
+                    .expect("transaction count fits in u64")
+                    >= limit
+            }) {
+                break;
             }
-            TRANSACTION_RECORD_V1_BYTES => {
-                let spent_utxos = spent_utxos(&db, &transaction_cf, &transaction)?;
-                let upgraded = explorer_transaction_record_with_utxos(
-                    &transaction,
-                    location.index.as_usize(),
-                    network,
-                    &spent_utxos,
-                );
-                if !options.dry_run {
-                    batch.zs_insert(
-                        &metadata_handle,
-                        location,
-                        RawBytes::new_raw_bytes(upgraded.as_bytes().to_vec()),
-                    );
-                    pending_writes += 1;
-                }
-                refilled_records = refilled_records
-                    .checked_add(1)
-                    .expect("transaction count fits in u64");
-            }
-            length => {
-                return Err(RefillTransactionAmountsError::InvalidRecordLength {
-                    location,
-                    length,
+            let Some((location, record)) = metadata_iter.next() else {
+                break;
+            };
+            scanned_records = scanned_records
+                .checked_add(1)
+                .expect("transaction count fits in u64");
+            let (transaction_location, transaction) = transaction_iter.next().ok_or(
+                RefillTransactionAmountsError::MissingRawTransaction(location),
+            )?;
+            if transaction_location != location {
+                return Err(RefillTransactionAmountsError::LocationMismatch {
+                    metadata: location,
+                    transaction: transaction_location,
                 });
             }
+
+            match record.raw_bytes().len() {
+                TRANSACTION_RECORD_V2_BYTES => {
+                    already_refilled_records = already_refilled_records
+                        .checked_add(1)
+                        .expect("transaction count fits in u64");
+                }
+                EXPLORER_TRANSACTION_RECORD_V1_BYTES => {
+                    legacy_entries.push(LegacyTransactionEntry {
+                        location,
+                        record,
+                        transaction,
+                    });
+                }
+                length => {
+                    return Err(RefillTransactionAmountsError::InvalidRecordLength {
+                        location,
+                        length,
+                    });
+                }
+            }
         }
 
-        if pending_writes == options.batch_size {
+        let upgraded_entries = upgrade_transaction_entries(
+            &db,
+            &transaction_cf,
+            network,
+            &worker_pool,
+            &mut source_cache,
+            &legacy_entries,
+        )?;
+        for upgraded in upgraded_entries {
+            if !options.dry_run {
+                batch.zs_insert(&metadata_handle, upgraded.location, upgraded.record);
+                pending_writes += 1;
+            }
+            refilled_records = refilled_records
+                .checked_add(1)
+                .expect("transaction count fits in u64");
+        }
+
+        if pending_writes >= options.batch_size {
             db.write_batch(batch)?;
             tracing::info!(
                 refilled_records,
-                location = ?location,
+                workers = options.workers,
+                source_cache_entries = options.source_cache_entries,
                 "refilled explorer transaction amounts"
             );
             batch = DiskWriteBatch::new();
             pending_writes = 0;
+        }
+
+        if options.limit.is_some_and(|limit| refilled_records >= limit) {
+            scan_complete = metadata_iter.peek().is_none();
+            break;
         }
     }
 
@@ -366,39 +432,10 @@ fn check_format_version(
     Ok(())
 }
 
-fn spent_utxos(
-    db: &ZakuraDb,
-    transaction_cf: &TypedColumnFamily<'_, TransactionLocation, Transaction>,
-    transaction: &Transaction,
-) -> Result<HashMap<OutPoint, Utxo>, RefillTransactionAmountsError> {
-    transaction
-        .spent_outpoints()
-        .map(|outpoint| {
-            let source_location = db
-                .transaction_location(outpoint.hash)
-                .ok_or(RefillTransactionAmountsError::MissingSpentTransactionLocation(outpoint))?;
-            let source_transaction = transaction_cf.zs_get(&source_location).ok_or(
-                RefillTransactionAmountsError::MissingSpentTransaction {
-                    outpoint,
-                    location: source_location,
-                },
-            )?;
-            let output_index = usize::try_from(outpoint.index)
-                .expect("u32 output indexes fit in usize on supported targets");
-            let output = source_transaction
-                .outputs()
-                .get(output_index)
-                .cloned()
-                .ok_or(RefillTransactionAmountsError::MissingSpentOutput(outpoint))?;
-            let utxo = Utxo::from_location(
-                output,
-                source_location.height,
-                source_location.index.as_usize(),
-            );
-
-            Ok((outpoint, utxo))
-        })
-        .collect()
+fn default_worker_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get().saturating_sub(1).max(1))
+        .unwrap_or(1)
 }
 
 #[cfg(test)]
@@ -493,12 +530,12 @@ mod tests {
             batch.zs_insert(
                 &metadata_handle,
                 source_location,
-                RawBytes::new_raw_bytes(vec![0; TRANSACTION_RECORD_V1_BYTES]),
+                RawBytes::new_raw_bytes(vec![0; EXPLORER_TRANSACTION_RECORD_V1_BYTES]),
             );
             batch.zs_insert(
                 &metadata_handle,
                 location,
-                RawBytes::new_raw_bytes(vec![0; TRANSACTION_RECORD_V1_BYTES]),
+                RawBytes::new_raw_bytes(vec![0; EXPLORER_TRANSACTION_RECORD_V1_BYTES]),
             );
             batch.zs_insert(
                 &transaction_handle,
@@ -511,6 +548,20 @@ mod tests {
             db.flush().expect("legacy test rows are flushed");
         }
 
+        let partial_summary = refill_transaction_amounts(
+            config.clone(),
+            &network,
+            RefillTransactionAmountsOptions {
+                limit: Some(1),
+                dry_run: false,
+                ..Default::default()
+            },
+        )
+        .expect("partial legacy transaction metadata is refilled");
+        assert_eq!(partial_summary.refilled_records, 1);
+        assert!(!partial_summary.scan_complete);
+        assert!(!partial_summary.schema_updated);
+
         let summary = refill_transaction_amounts(
             config.clone(),
             &network,
@@ -519,8 +570,9 @@ mod tests {
                 ..Default::default()
             },
         )
-        .expect("legacy transaction amount is refilled");
-        assert_eq!(summary.refilled_records, 2);
+        .expect("remaining legacy transaction metadata is refilled");
+        assert_eq!(summary.refilled_records, 1);
+        assert_eq!(summary.already_refilled_records, 1);
         assert!(summary.scan_complete);
         assert!(summary.schema_updated);
 

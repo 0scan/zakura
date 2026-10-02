@@ -344,6 +344,7 @@ pub struct ExplorerShieldedClassLocation {
 }
 
 const EXPLORER_TRANSACTION_ENDPOINT_BYTES: usize = 22;
+pub(super) const EXPLORER_TRANSACTION_RECORD_V1_BYTES: usize = 72;
 pub(super) const EXPLORER_TRANSACTION_RECORD_BYTES: usize = 124;
 const EXPLORER_ADDRESS_RECORD_BYTES: usize = 24;
 
@@ -470,6 +471,35 @@ fn transaction_endpoint_bytes(
         Some(TransactionValueEndpoint::Orchard) => 5,
         Some(TransactionValueEndpoint::Ironwood) => 6,
     };
+    bytes
+}
+
+pub(super) fn upgraded_explorer_transaction_record_bytes(
+    legacy_bytes: &[u8],
+    transparent_output_total_zat: i64,
+    primary_from: Option<TransactionValueEndpoint>,
+    primary_to: Option<TransactionValueEndpoint>,
+) -> [u8; EXPLORER_TRANSACTION_RECORD_BYTES] {
+    assert_eq!(legacy_bytes.len(), EXPLORER_TRANSACTION_RECORD_V1_BYTES);
+    let mut bytes = [0; EXPLORER_TRANSACTION_RECORD_BYTES];
+    bytes[..EXPLORER_TRANSACTION_RECORD_V1_BYTES].copy_from_slice(legacy_bytes);
+    let mut offset = EXPLORER_TRANSACTION_RECORD_V1_BYTES;
+    put(
+        &mut bytes,
+        &mut offset,
+        &transparent_output_total_zat.to_be_bytes(),
+    );
+    put(
+        &mut bytes,
+        &mut offset,
+        &transaction_endpoint_bytes(primary_from),
+    );
+    put(
+        &mut bytes,
+        &mut offset,
+        &transaction_endpoint_bytes(primary_to),
+    );
+    debug_assert_eq!(offset, EXPLORER_TRANSACTION_RECORD_BYTES);
     bytes
 }
 
@@ -623,6 +653,50 @@ mod tests {
         assert_eq!(
             ExplorerTransactionRecord::from_bytes(record.as_bytes()),
             record
+        );
+    }
+
+    #[test]
+    fn transaction_record_upgrade_preserves_legacy_fields() {
+        let original = ExplorerTransactionRecord {
+            serialized_size: 1234,
+            fee_zat: 10_000,
+            transparent_value_balance_zat: -1,
+            sapling_value_balance_zat: 2,
+            orchard_value_balance_zat: -3,
+            ironwood_value_balance_zat: 4,
+            transparent_input_count: 5,
+            transparent_output_count: 6,
+            joinsplit_count: 7,
+            sapling_spend_count: 8,
+            sapling_output_count: 9,
+            orchard_action_count: 10,
+            ironwood_action_count: 11,
+            transparent_output_total_zat: 0,
+            primary_from: None,
+            primary_to: None,
+        };
+        let original_bytes = original.as_bytes();
+        let primary_from = Some(TransactionValueEndpoint::Transparent(
+            Address::from_pub_key_hash(NetworkKind::Mainnet, [13; 20]),
+        ));
+        let primary_to = Some(TransactionValueEndpoint::Ironwood);
+        let upgraded =
+            ExplorerTransactionRecord::from_bytes(upgraded_explorer_transaction_record_bytes(
+                &original_bytes[..EXPLORER_TRANSACTION_RECORD_V1_BYTES],
+                12,
+                primary_from,
+                primary_to,
+            ));
+
+        assert_eq!(
+            upgraded,
+            ExplorerTransactionRecord {
+                transparent_output_total_zat: 12,
+                primary_from,
+                primary_to,
+                ..original
+            }
         );
     }
 

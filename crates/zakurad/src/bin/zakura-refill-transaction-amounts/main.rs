@@ -24,6 +24,16 @@ struct Args {
     #[clap(long, default_value_t = 10_000)]
     batch_size: usize,
 
+    /// Worker threads for historical transaction reads and endpoint derivation.
+    /// Defaults to one fewer than the available CPU count.
+    #[clap(long)]
+    workers: Option<usize>,
+
+    /// Decoded historical source transactions retained between batches.
+    /// Defaults to 10,000 entries; zero disables the cache.
+    #[clap(long)]
+    source_cache_entries: Option<usize>,
+
     /// Stop after this many legacy records, for benchmarking or a partial resumable run.
     #[clap(long)]
     limit: Option<u64>,
@@ -50,8 +60,13 @@ fn run(args: Args) -> Result<()> {
         cache_dir: args.cache_dir,
         ..Default::default()
     };
+    let defaults = RefillTransactionAmountsOptions::default();
     let options = RefillTransactionAmountsOptions {
         batch_size: args.batch_size,
+        workers: args.workers.unwrap_or(defaults.workers),
+        source_cache_entries: args
+            .source_cache_entries
+            .unwrap_or(defaults.source_cache_entries),
         limit: args.limit,
         dry_run: !args.confirm,
     };
@@ -61,6 +76,10 @@ fn run(args: Args) -> Result<()> {
     } else {
         println!("dry run: no database changes will be written");
     }
+    println!(
+        "workers: {}, source cache entries: {}",
+        options.workers, options.source_cache_entries
+    );
 
     let summary = zakura_state::refill_transaction_amounts(config, &args.network, options)?;
     print_summary(&summary);
