@@ -47,7 +47,6 @@ pub(super) fn transactions_page(
     transactions: Vec<VerifiedUnminedTx>,
     dependencies: &TransactionDependencies,
     request: &GetMempoolTransactionsRequest,
-    network: &Network,
 ) -> Result<MempoolTransactionsResponse, Error> {
     let query = request.transaction_query().map_err(Error::InvalidQuery)?;
     let filter_tags = filter_tags(request)?;
@@ -67,7 +66,6 @@ pub(super) fn transactions_page(
         ));
     }
 
-    let spent_outpoints = mempool_spent_outpoints(&transactions);
     let mut summary = MempoolTransactionSummary::default();
     let mut matches = Vec::new();
     for transaction in &transactions {
@@ -84,8 +82,6 @@ pub(super) fn transactions_page(
                 dependencies,
                 fee_zat,
                 classification,
-                network,
-                &spent_outpoints,
             )?);
         }
     }
@@ -196,8 +192,6 @@ fn positioned_list_item(
     dependencies: &TransactionDependencies,
     fee_zat: u64,
     classification: TransactionClassification,
-    network: &Network,
-    spent_outpoints: &HashSet<OutPoint>,
 ) -> Result<PositionedTransaction, Error> {
     let raw_transaction = transaction.transaction.transaction().as_ref();
 
@@ -229,8 +223,6 @@ fn positioned_list_item(
             total_input: classification.transparent_input_total_zat.to_string(),
             total_output: classification.transparent_output_total_zat.to_string(),
             value_balance_transparent: classification.transparent_value_balance_zat.to_string(),
-            inputs: transparent_inputs(transaction, network)?,
-            outputs: transparent_outputs(transaction, network, spent_outpoints)?,
             shielded_value_balance: classification.shielded_value_balance_zat.to_string(),
             value_balance_sapling: raw_transaction
                 .sapling_value_balance()
@@ -616,7 +608,6 @@ mod tests {
             Vec::new(),
             &TransactionDependencies::default(),
             &GetMempoolTransactionsRequest::default(),
-            &Network::Mainnet,
         )
         .unwrap();
 
@@ -636,12 +627,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = transactions_page(
-            Vec::new(),
-            &TransactionDependencies::default(),
-            &request,
-            &Network::Mainnet,
-        );
+        let result = transactions_page(Vec::new(), &TransactionDependencies::default(), &request);
 
         assert!(matches!(result, Err(Error::InvalidCursor(_))));
     }

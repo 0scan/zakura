@@ -3,8 +3,8 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 use zakura_indexer::{
-    BlockTransactionInput, BlockTransactionOutput, ShieldedFlow, ShieldedPool, TransactionData,
-    TransactionDetails, TransactionKind, TransactionStatus, TransactionsPagination,
+    ShieldedFlow, ShieldedPool, TransactionData, TransactionDetails, TransactionKind,
+    TransactionStatus, TransactionsPagination,
 };
 
 /// A compact pending transaction summary for mempool list views.
@@ -40,10 +40,6 @@ pub struct MempoolTransactionListItem {
     pub total_output: String,
     /// Transparent value balance in zatoshis.
     pub value_balance_transparent: String,
-    /// Resolved public transparent inputs.
-    pub inputs: Vec<BlockTransactionInput>,
-    /// Public transparent outputs.
-    pub outputs: Vec<BlockTransactionOutput>,
     /// Combined shielded value balance in zatoshis.
     pub shielded_value_balance: String,
     /// Sapling value balance in zatoshis.
