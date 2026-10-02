@@ -2,7 +2,10 @@
 
 mod staging_file;
 
-use std::{path::Path, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use zakura_chain::{
     block::{self, Height},
@@ -20,7 +23,7 @@ use super::{
     RefillTransactionAmountsError, RefillTransactionAmountsOptions,
     RefillTransactionAmountsSummary, EXPLORER_TRANSACTION_META_BY_LOC,
 };
-use staging_file::{PreparedRefillReader, PreparedRefillWriter};
+use staging_file::{partial_path_for, PreparedRefillReader, PreparedRefillWriter};
 
 /// Outcome of preparing transaction metadata while the node remains online.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +34,8 @@ pub struct PreparedTransactionAmountRefillSummary {
     pub source_tip_hash: block::Hash,
     /// Version-two records written to the prepared artifact.
     pub prepared_records: u64,
+    /// Records recovered from an existing partial artifact.
+    pub resumed_records: u64,
     /// Whole seconds spent deriving and writing the artifact.
     pub elapsed_seconds: u64,
 }
@@ -57,6 +62,35 @@ pub fn prepare_transaction_amount_refill(
     options: RefillTransactionAmountsOptions,
     output: &Path,
 ) -> Result<PreparedTransactionAmountRefillSummary, RefillTransactionAmountsError> {
+    prepare_transaction_amount_refill_from(config, network, options, output, None)
+}
+
+/// Continue preparing `output` after validating and recovering `partial`.
+///
+/// Any incomplete record at the end of `partial` is discarded. All complete records are checksum
+/// inputs and the scan continues strictly after their last transaction location.
+pub fn resume_prepared_transaction_amount_refill(
+    config: Config,
+    network: &Network,
+    options: RefillTransactionAmountsOptions,
+    output: &Path,
+    partial: &Path,
+) -> Result<PreparedTransactionAmountRefillSummary, RefillTransactionAmountsError> {
+    prepare_transaction_amount_refill_from(config, network, options, output, Some(partial))
+}
+
+/// Returns the durable checkpoint path used by a new prepare run.
+pub fn prepared_transaction_amount_refill_partial_path(output: &Path) -> PathBuf {
+    partial_path_for(output)
+}
+
+fn prepare_transaction_amount_refill_from(
+    config: Config,
+    network: &Network,
+    options: RefillTransactionAmountsOptions,
+    output: &Path,
+    partial: Option<&Path>,
+) -> Result<PreparedTransactionAmountRefillSummary, RefillTransactionAmountsError> {
     let started = Instant::now();
     let options = RefillTransactionAmountsOptions {
         limit: None,
@@ -68,15 +102,28 @@ pub fn prepare_transaction_amount_refill(
     if explorer_schema_is_current(&db)? {
         return Err(RefillTransactionAmountsError::ExplorerSchemaAlreadyCurrent);
     }
-    let (source_tip_height, source_tip_hash) = db
-        .tip()
-        .ok_or(RefillTransactionAmountsError::EmptyDatabase)?;
-    let mut writer =
-        PreparedRefillWriter::create(output, network.kind(), source_tip_height, source_tip_hash)?;
-    let calculation =
-        calculate_refill_records(&db, network, options, &worker_pool, None, |entries| {
-            writer.write_entries(entries)
-        })?;
+    let mut writer = if let Some(partial) = partial {
+        PreparedRefillWriter::resume(output, partial, network.kind())?
+    } else {
+        let (source_tip_height, source_tip_hash) = db
+            .tip()
+            .ok_or(RefillTransactionAmountsError::EmptyDatabase)?;
+        PreparedRefillWriter::create(output, network.kind(), source_tip_height, source_tip_hash)?
+    };
+    let manifest = writer.manifest();
+    validate_source_tip(&db, manifest.source_tip_height, manifest.source_tip_hash)?;
+    let resumed_records = manifest.record_count;
+    let calculation = calculate_refill_records(
+        &db,
+        network,
+        options,
+        &worker_pool,
+        writer.last_location(),
+        Some(TransactionLocation::max_for_height(
+            manifest.source_tip_height,
+        )),
+        |entries| writer.write_entries(entries),
+    )?;
     if calculation.already_refilled_records != 0 {
         return Err(RefillTransactionAmountsError::PartiallyRefilledDatabase(
             calculation.already_refilled_records,
@@ -85,12 +132,18 @@ pub fn prepare_transaction_amount_refill(
     debug_assert!(calculation.scan_complete);
     debug_assert_eq!(calculation.refilled_records, calculation.scanned_records);
     let prepared_records = writer.finish()?;
-    debug_assert_eq!(prepared_records, calculation.refilled_records);
+    debug_assert_eq!(
+        prepared_records,
+        resumed_records
+            .checked_add(calculation.refilled_records)
+            .expect("transaction count fits in u64")
+    );
 
     Ok(PreparedTransactionAmountRefillSummary {
-        source_tip_height,
-        source_tip_hash,
+        source_tip_height: manifest.source_tip_height,
+        source_tip_hash: manifest.source_tip_hash,
         prepared_records,
+        resumed_records,
         elapsed_seconds: started.elapsed().as_secs(),
     })
 }

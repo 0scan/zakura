@@ -30,12 +30,13 @@ use super::{
     EXPLORER_SCHEMA, EXPLORER_TRANSACTION_META_BY_LOC,
 };
 use source_transactions::{
-    upgrade_transaction_entries, LegacyTransactionEntry, SourceTransactionCache,
+    upgrade_transaction_entries, LegacyTransactionEntry, SourceOutputCache,
     UpgradedTransactionEntry,
 };
 
 pub use prepared_refill::{
     apply_prepared_transaction_amount_refill, prepare_transaction_amount_refill,
+    prepared_transaction_amount_refill_partial_path, resume_prepared_transaction_amount_refill,
     AppliedPreparedTransactionAmountRefillSummary, PreparedTransactionAmountRefillSummary,
 };
 
@@ -50,7 +51,7 @@ pub struct RefillTransactionAmountsOptions {
     pub batch_size: usize,
     /// Number of worker threads used for historical transaction reads and endpoint derivation.
     pub workers: usize,
-    /// Maximum number of decoded historical source transactions retained between batches.
+    /// Maximum number of decoded historical source outputs retained between batches.
     pub source_cache_entries: usize,
     /// Optional record limit for benchmarking or partial refill runs.
     pub limit: Option<u64>,
@@ -297,6 +298,7 @@ fn refill_transaction_amounts_from(
         options,
         &worker_pool,
         start_after,
+        None,
         |upgraded_entries| {
             if options.dry_run || upgraded_entries.is_empty() {
                 return Ok(());
@@ -408,6 +410,7 @@ fn calculate_refill_records(
     options: RefillTransactionAmountsOptions,
     worker_pool: &rayon::ThreadPool,
     start_after: Option<TransactionLocation>,
+    end_at: Option<TransactionLocation>,
     mut consume_batch: impl FnMut(
         Vec<UpgradedTransactionEntry>,
     ) -> Result<(), RefillTransactionAmountsError>,
@@ -422,7 +425,7 @@ fn calculate_refill_records(
             .expect("raw transaction column family is registered");
     let refill_range = (
         start_after.map_or(Bound::Unbounded, Bound::Excluded),
-        Bound::Unbounded,
+        end_at.map_or(Bound::Unbounded, Bound::Included),
     );
 
     let mut already_refilled_records = 0_u64;
@@ -456,14 +459,18 @@ fn calculate_refill_records(
         });
     };
 
+    let remaining_range = (
+        Bound::Included(first_legacy_location),
+        end_at.map_or(Bound::Unbounded, Bound::Included),
+    );
     let mut metadata_iter = metadata_cf
-        .zs_forward_range_iter(first_legacy_location..)
+        .zs_forward_range_iter(remaining_range)
         .peekable();
-    let mut transaction_iter = transaction_cf.zs_forward_range_iter(first_legacy_location..);
+    let mut transaction_iter = transaction_cf.zs_forward_range_iter(remaining_range);
     let mut scanned_records = 0_u64;
     let mut refilled_records = 0_u64;
     let mut scan_complete = true;
-    let mut source_cache = SourceTransactionCache::new(options.source_cache_entries);
+    let mut source_cache = SourceOutputCache::new(options.source_cache_entries);
 
     while metadata_iter.peek().is_some() {
         let mut legacy_entries = Vec::with_capacity(options.batch_size);
@@ -578,6 +585,11 @@ fn count_as_u64(count: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs::OpenOptions,
+        io::{Seek, SeekFrom, Write},
+    };
+
     use zakura_chain::{
         amount::{Amount, NonNegative},
         block::{self, Height},
@@ -748,6 +760,10 @@ mod tests {
 
     #[test]
     fn prepared_refill_imports_snapshot_and_calculates_missing_tail() {
+        const PREPARED_RECORD_COUNT_OFFSET: u64 = 52;
+        const PREPARED_HEADER_BYTES: u64 = 60;
+        const PREPARED_ENTRY_BYTES: u64 = 129;
+
         let fixture = legacy_refill_fixture();
         let artifact_dir = tempfile::tempdir().expect("temporary artifact directory is created");
         let artifact_path = artifact_dir.path().join("transaction-refill.zkr");
@@ -761,6 +777,38 @@ mod tests {
         .expect("legacy transaction metadata is prepared");
         assert_eq!(prepared.source_tip_height, Height(2));
         assert_eq!(prepared.prepared_records, 2);
+        assert_eq!(prepared.resumed_records, 0);
+
+        let partial_path = prepared_transaction_amount_refill_partial_path(&artifact_path);
+        std::fs::rename(&artifact_path, &partial_path)
+            .expect("completed artifact becomes an interrupted checkpoint");
+        let mut partial = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&partial_path)
+            .expect("checkpoint reopens");
+        partial
+            .set_len(PREPARED_HEADER_BYTES + PREPARED_ENTRY_BYTES)
+            .and_then(|()| {
+                partial
+                    .seek(SeekFrom::Start(PREPARED_RECORD_COUNT_OFFSET))
+                    .map(|_| ())
+            })
+            .and_then(|()| partial.write_all(&1_u64.to_be_bytes()))
+            .and_then(|()| partial.sync_all())
+            .expect("checkpoint is truncated after its first record");
+        drop(partial);
+
+        let resumed = resume_prepared_transaction_amount_refill(
+            fixture.config.clone(),
+            &fixture.network,
+            RefillTransactionAmountsOptions::default(),
+            &artifact_path,
+            &partial_path,
+        )
+        .expect("preparation resumes after its first checkpointed record");
+        assert_eq!(resumed.prepared_records, 2);
+        assert_eq!(resumed.resumed_records, 1);
 
         let tail_location = TransactionLocation::from_usize(Height(3), 0);
         let tail_transaction = Transaction::V1 {

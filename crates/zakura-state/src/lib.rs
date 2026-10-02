@@ -107,7 +107,8 @@ pub use service::finalized_state::vct_fast_sync_fixture::{VctFastSyncedChain, Vc
 #[cfg(feature = "indexer")]
 pub use explorer::{
     apply_prepared_transaction_amount_refill, prepare_transaction_amount_refill,
-    refill_transaction_amounts, AppliedPreparedTransactionAmountRefillSummary,
+    prepared_transaction_amount_refill_partial_path, refill_transaction_amounts,
+    resume_prepared_transaction_amount_refill, AppliedPreparedTransactionAmountRefillSummary,
     PreparedTransactionAmountRefillSummary, RefillTransactionAmountsError,
     RefillTransactionAmountsOptions, RefillTransactionAmountsSummary,
 };

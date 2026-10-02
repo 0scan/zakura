@@ -9,7 +9,7 @@ use rayon::{prelude::*, ThreadPool};
 use zakura_chain::{
     parameters::Network,
     transaction::{self, primary_value_endpoints, Transaction},
-    transparent::Output,
+    transparent::{OutPoint, Output},
 };
 
 use crate::service::finalized_state::{RawBytes, TransactionLocation, TypedColumnFamily, ZakuraDb};
@@ -30,45 +30,45 @@ pub(super) struct UpgradedTransactionEntry {
     pub(super) record: RawBytes,
 }
 
-/// A bounded FIFO cache of decoded transactions referenced by transparent inputs.
+/// A bounded FIFO cache of decoded outputs referenced by transparent inputs.
 ///
-/// The refill scans spending transactions in chain order, so recently loaded sources are the most
-/// useful across adjacent chunks. FIFO eviction keeps cache operations constant-time without a
-/// shared lock in the parallel derivation path.
-pub(super) struct SourceTransactionCache {
+/// Retaining only the requested outputs prevents large shielded source transactions from remaining
+/// resident between batches. FIFO eviction keeps cache operations constant-time without a shared
+/// lock in the parallel derivation path.
+pub(super) struct SourceOutputCache {
     capacity: usize,
-    transactions: HashMap<transaction::Hash, Arc<Transaction>>,
-    insertion_order: VecDeque<transaction::Hash>,
+    outputs: HashMap<OutPoint, Arc<Output>>,
+    insertion_order: VecDeque<OutPoint>,
 }
 
-impl SourceTransactionCache {
+impl SourceOutputCache {
     pub(super) fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            transactions: HashMap::with_capacity(capacity),
+            outputs: HashMap::with_capacity(capacity),
             insertion_order: VecDeque::with_capacity(capacity),
         }
     }
 
-    fn get(&self, hash: transaction::Hash) -> Option<Arc<Transaction>> {
-        self.transactions.get(&hash).cloned()
+    fn get(&self, outpoint: OutPoint) -> Option<Arc<Output>> {
+        self.outputs.get(&outpoint).cloned()
     }
 
-    fn insert(&mut self, hash: transaction::Hash, transaction: Arc<Transaction>) {
-        if self.capacity == 0 || self.transactions.contains_key(&hash) {
+    fn insert(&mut self, outpoint: OutPoint, output: Arc<Output>) {
+        if self.capacity == 0 || self.outputs.contains_key(&outpoint) {
             return;
         }
 
-        while self.transactions.len() >= self.capacity {
-            let evicted_hash = self
+        while self.outputs.len() >= self.capacity {
+            let evicted_outpoint = self
                 .insertion_order
                 .pop_front()
-                .expect("a full source transaction cache has an insertion-order entry");
-            self.transactions.remove(&evicted_hash);
+                .expect("a full source output cache has an insertion-order entry");
+            self.outputs.remove(&evicted_outpoint);
         }
 
-        self.transactions.insert(hash, transaction);
-        self.insertion_order.push_back(hash);
+        self.outputs.insert(outpoint, output);
+        self.insertion_order.push_back(outpoint);
     }
 }
 
@@ -78,55 +78,59 @@ pub(super) fn upgrade_transaction_entries(
     transaction_cf: &TypedColumnFamily<'_, TransactionLocation, Transaction>,
     network: &Network,
     worker_pool: &ThreadPool,
-    source_cache: &mut SourceTransactionCache,
+    source_cache: &mut SourceOutputCache,
     entries: &[LegacyTransactionEntry],
 ) -> Result<Vec<UpgradedTransactionEntry>, RefillTransactionAmountsError> {
-    let source_hashes = distinct_source_hashes(entries);
-    let mut source_transactions = HashMap::with_capacity(source_hashes.len());
-    let mut missing_hashes = Vec::new();
-    for hash in source_hashes {
-        if let Some(transaction) = source_cache.get(hash) {
-            source_transactions.insert(hash, transaction);
+    let source_outpoints = distinct_source_outpoints(entries);
+    let mut source_outputs = HashMap::with_capacity(source_outpoints.len());
+    let mut missing_outpoints_by_hash = HashMap::<transaction::Hash, Vec<OutPoint>>::new();
+    for outpoint in source_outpoints {
+        if let Some(output) = source_cache.get(outpoint) {
+            source_outputs.insert(outpoint, output);
         } else {
-            missing_hashes.push(hash);
+            missing_outpoints_by_hash
+                .entry(outpoint.hash)
+                .or_default()
+                .push(outpoint);
         }
     }
 
-    let loaded_transactions = worker_pool.install(|| {
-        missing_hashes
-            .par_iter()
-            .map(|hash| load_source_transaction(db, transaction_cf, *hash))
+    let loaded_outputs = worker_pool.install(|| {
+        missing_outpoints_by_hash
+            .into_par_iter()
+            .map(|(hash, outpoints)| load_source_outputs(db, transaction_cf, hash, &outpoints))
             .collect::<Vec<_>>()
     });
-    for loaded_transaction in loaded_transactions {
-        let (hash, transaction) = loaded_transaction?;
-        source_cache.insert(hash, transaction.clone());
-        source_transactions.insert(hash, transaction);
+    for loaded_outputs_for_transaction in loaded_outputs {
+        for (outpoint, output) in loaded_outputs_for_transaction? {
+            source_cache.insert(outpoint, output.clone());
+            source_outputs.insert(outpoint, output);
+        }
     }
 
     worker_pool.install(|| {
         entries
             .par_iter()
-            .map(|entry| upgrade_transaction_entry(entry, network, &source_transactions))
+            .map(|entry| upgrade_transaction_entry(entry, network, &source_outputs))
             .collect()
     })
 }
 
-fn distinct_source_hashes(entries: &[LegacyTransactionEntry]) -> Vec<transaction::Hash> {
+fn distinct_source_outpoints(entries: &[LegacyTransactionEntry]) -> Vec<OutPoint> {
     let mut seen = HashSet::new();
     entries
         .iter()
         .flat_map(|entry| entry.transaction.spent_outpoints())
-        .map(|outpoint| outpoint.hash)
-        .filter(|hash| seen.insert(*hash))
+        .filter(|outpoint| seen.insert(*outpoint))
         .collect()
 }
 
-fn load_source_transaction(
+fn load_source_outputs(
     db: &ZakuraDb,
     transaction_cf: &TypedColumnFamily<'_, TransactionLocation, Transaction>,
     hash: transaction::Hash,
-) -> Result<(transaction::Hash, Arc<Transaction>), RefillTransactionAmountsError> {
+    outpoints: &[OutPoint],
+) -> Result<Vec<(OutPoint, Arc<Output>)>, RefillTransactionAmountsError> {
     let location = db
         .transaction_location(hash)
         .ok_or(RefillTransactionAmountsError::MissingSpentTransactionLocation(hash))?;
@@ -134,26 +138,32 @@ fn load_source_transaction(
         .zs_get(&location)
         .ok_or(RefillTransactionAmountsError::MissingSpentTransaction { hash, location })?;
 
-    Ok((hash, Arc::new(transaction)))
+    outpoints
+        .iter()
+        .map(|outpoint| {
+            let output_index = usize::try_from(outpoint.index)
+                .expect("u32 output indexes fit in usize on supported targets");
+            let output = transaction
+                .outputs()
+                .get(output_index)
+                .ok_or(RefillTransactionAmountsError::MissingSpentOutput(*outpoint))?;
+            Ok((*outpoint, Arc::new(output.clone())))
+        })
+        .collect()
 }
 
 fn upgrade_transaction_entry(
     entry: &LegacyTransactionEntry,
     network: &Network,
-    source_transactions: &HashMap<transaction::Hash, Arc<Transaction>>,
+    source_outputs: &HashMap<OutPoint, Arc<Output>>,
 ) -> Result<UpgradedTransactionEntry, RefillTransactionAmountsError> {
     let spent_outputs = entry
         .transaction
         .spent_outpoints()
         .map(|outpoint| {
-            let source_transaction = source_transactions
-                .get(&outpoint.hash)
-                .expect("every distinct transparent source was loaded for this chunk");
-            let output_index = usize::try_from(outpoint.index)
-                .expect("u32 output indexes fit in usize on supported targets");
-            source_transaction
-                .outputs()
-                .get(output_index)
+            source_outputs
+                .get(&outpoint)
+                .map(AsRef::as_ref)
                 .ok_or(RefillTransactionAmountsError::MissingSpentOutput(outpoint))
         })
         .collect::<Result<Vec<&Output>, _>>()?;
@@ -194,24 +204,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn source_transaction_cache_evicts_oldest_insertions() {
-        let transaction = Arc::new(
+    fn source_output_cache_evicts_oldest_insertions() {
+        let output = Arc::new(
             regtest_genesis_block()
                 .transactions
                 .first()
                 .expect("genesis block has a coinbase transaction")
-                .as_ref()
+                .outputs()
+                .first()
+                .expect("genesis coinbase has an output")
                 .clone(),
         );
         let first = Hash([1; 32]);
         let second = Hash([2; 32]);
         let third = Hash([3; 32]);
-        let mut cache = SourceTransactionCache::new(2);
+        let first = OutPoint::from_usize(first, 0);
+        let second = OutPoint::from_usize(second, 0);
+        let third = OutPoint::from_usize(third, 0);
+        let mut cache = SourceOutputCache::new(2);
 
-        cache.insert(first, transaction.clone());
-        cache.insert(second, transaction.clone());
+        cache.insert(first, output.clone());
+        cache.insert(second, output.clone());
         assert!(cache.get(first).is_some());
-        cache.insert(third, transaction);
+        cache.insert(third, output);
 
         assert!(cache.get(first).is_none());
         assert!(cache.get(second).is_some());

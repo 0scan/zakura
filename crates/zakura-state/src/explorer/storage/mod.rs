@@ -16,7 +16,8 @@ pub(crate) use columns::{
 };
 pub use refill_transaction_amounts::{
     apply_prepared_transaction_amount_refill, prepare_transaction_amount_refill,
-    refill_transaction_amounts, AppliedPreparedTransactionAmountRefillSummary,
+    prepared_transaction_amount_refill_partial_path, refill_transaction_amounts,
+    resume_prepared_transaction_amount_refill, AppliedPreparedTransactionAmountRefillSummary,
     PreparedTransactionAmountRefillSummary, RefillTransactionAmountsError,
     RefillTransactionAmountsOptions, RefillTransactionAmountsSummary,
 };

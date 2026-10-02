@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::{bail, Result};
+use tracing_subscriber::EnvFilter;
 use zakura_chain::parameters::Network;
 use zakura_state::{
     AppliedPreparedTransactionAmountRefillSummary, PreparedTransactionAmountRefillSummary,
@@ -32,7 +33,7 @@ struct Args {
     #[clap(long)]
     workers: Option<usize>,
 
-    /// Decoded historical source transactions retained between batches.
+    /// Decoded historical source outputs retained between batches.
     /// Defaults to 10,000 entries; zero disables the cache.
     #[clap(long)]
     source_cache_entries: Option<usize>,
@@ -49,6 +50,10 @@ enum Command {
         /// New artifact path. Existing files are never replaced.
         #[clap(long)]
         output: PathBuf,
+
+        /// Partial artifact from an interrupted prepare run.
+        #[clap(long)]
+        resume_from: Option<PathBuf>,
     },
 
     /// Import a prepared artifact and calculate records appended after its snapshot.
@@ -80,6 +85,17 @@ fn main() {
         std::process::exit(1);
     }
 
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("zakura_state=info"));
+    if let Err(error) = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .try_init()
+    {
+        eprintln!("failed to install tracing subscriber: {error}");
+        std::process::exit(1);
+    }
+
     if let Err(error) = run(Args::parse()) {
         eprintln!("failed to refill explorer transaction metadata: {error:?}");
         std::process::exit(1);
@@ -107,14 +123,31 @@ fn run(args: Args) -> Result<()> {
     );
 
     match args.command {
-        Command::Prepare { output } => {
+        Command::Prepare {
+            output,
+            resume_from,
+        } => {
             println!("preparing from a read-only secondary; zakurad may remain online");
-            let summary = zakura_state::prepare_transaction_amount_refill(
-                config,
-                &args.network,
-                base_options,
-                &output,
-            )?;
+            let summary = if let Some(partial) = resume_from {
+                println!("recovering checkpoint: {}", partial.display());
+                zakura_state::resume_prepared_transaction_amount_refill(
+                    config,
+                    &args.network,
+                    base_options,
+                    &output,
+                    &partial,
+                )?
+            } else {
+                let partial =
+                    zakura_state::prepared_transaction_amount_refill_partial_path(&output);
+                println!("durable checkpoint: {}", partial.display());
+                zakura_state::prepare_transaction_amount_refill(
+                    config,
+                    &args.network,
+                    base_options,
+                    &output,
+                )?
+            };
             print_prepared_summary(&summary, &output);
         }
         Command::Apply { input, confirm } => {
@@ -162,6 +195,7 @@ fn print_prepared_summary(summary: &PreparedTransactionAmountRefillSummary, outp
     println!("  source tip height: {}", summary.source_tip_height.0);
     println!("  source tip hash: {}", summary.source_tip_hash);
     println!("  prepared records: {}", summary.prepared_records);
+    println!("  resumed records: {}", summary.resumed_records);
     println!("  output: {}", output.display());
     println!("  elapsed seconds: {}", summary.elapsed_seconds);
 }
