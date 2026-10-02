@@ -139,6 +139,49 @@ impl ZakuraDb {
         column_families_in_code: impl IntoIterator<Item = String>,
         read_only: bool,
     ) -> Result<ZakuraDb, StateInitError> {
+        Self::new_inner(
+            config,
+            db_kind,
+            format_version_in_code,
+            network,
+            debug_skip_format_upgrades,
+            column_families_in_code,
+            read_only,
+            false,
+        )
+    }
+
+    #[cfg(feature = "indexer")]
+    pub(crate) fn new_for_explorer_amount_refill(
+        config: &Config,
+        network: &Network,
+        read_only: bool,
+    ) -> Result<ZakuraDb, StateInitError> {
+        Self::new_inner(
+            config,
+            crate::constants::STATE_DATABASE_KIND,
+            &crate::constants::state_database_format_version_in_code(),
+            network,
+            true,
+            super::STATE_COLUMN_FAMILIES_IN_CODE
+                .iter()
+                .map(ToString::to_string),
+            read_only,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::unwrap_in_result)]
+    fn new_inner(
+        config: &Config,
+        db_kind: impl AsRef<str>,
+        format_version_in_code: &Version,
+        network: &Network,
+        debug_skip_format_upgrades: bool,
+        column_families_in_code: impl IntoIterator<Item = String>,
+        read_only: bool,
+        skip_explorer_schema_check: bool,
+    ) -> Result<ZakuraDb, StateInitError> {
         // A read-only secondary follows another process's primary database and must never delete
         // it, whereas an ephemeral database deletes its files on drop, so the two modes are
         // mutually exclusive. Reject the combination up front, before the read-only branch below
@@ -246,7 +289,12 @@ impl ZakuraDb {
         db.run_startup_format_change(format_change)?;
 
         #[cfg(feature = "indexer")]
-        db.ensure_explorer_schema(read_only)?;
+        if !skip_explorer_schema_check {
+            db.ensure_explorer_schema(read_only)?;
+        }
+
+        #[cfg(not(feature = "indexer"))]
+        let _ = skip_explorer_schema_check;
 
         Ok(db)
     }

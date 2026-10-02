@@ -344,7 +344,7 @@ pub struct ExplorerShieldedClassLocation {
 }
 
 const EXPLORER_TRANSACTION_ENDPOINT_BYTES: usize = 22;
-const EXPLORER_TRANSACTION_RECORD_BYTES: usize = 124;
+pub(super) const EXPLORER_TRANSACTION_RECORD_BYTES: usize = 124;
 const EXPLORER_ADDRESS_RECORD_BYTES: usize = 24;
 
 impl IntoDisk for ExplorerAddressRecord {

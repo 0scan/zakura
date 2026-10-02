@@ -49,6 +49,12 @@ name = "zakura-rollback-state"
 path = "src/bin/zakura-rollback-state/main.rs"
 test = false
 
+[[bin]]
+name = "zakura-refill-transaction-amounts"
+path = "src/bin/zakura-refill-transaction-amounts/main.rs"
+test = false
+required-features = ["indexer"]
+
 # `cargo release` settings
 [package.metadata.release]
 pre-release-replacements = [

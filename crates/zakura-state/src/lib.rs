@@ -104,6 +104,11 @@ pub use service::finalized_state::{ReadDisk, TypedColumnFamily, WriteTypedBatch}
 #[cfg(any(test, feature = "proptest-impl"))]
 pub use service::finalized_state::vct_fast_sync_fixture::{VctFastSyncedChain, VctFastSyncedNode};
 
+#[cfg(feature = "indexer")]
+pub use explorer::{
+    refill_transaction_amounts, RefillTransactionAmountsError, RefillTransactionAmountsOptions,
+    RefillTransactionAmountsSummary,
+};
 #[cfg(feature = "internal-bench")]
 pub use service::finalized_state::{
     benchmark_finality_witness, FinalityWitnessBenchmarkReport, FinalityWitnessBenchmarkSample,

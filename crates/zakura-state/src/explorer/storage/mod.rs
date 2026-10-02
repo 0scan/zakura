@@ -5,6 +5,7 @@ use crate::service::finalized_state::ZakuraDb;
 mod balances;
 mod columns;
 pub(super) mod disk_format;
+mod refill_transaction_amounts;
 mod stats;
 mod transactions;
 
@@ -12,6 +13,10 @@ pub(crate) use columns::{
     EXPLORER_ADDRESS_META, EXPLORER_BALANCE_ORDER, EXPLORER_BLOCK_STATS, EXPLORER_CHAIN_STATS,
     EXPLORER_DAILY_STATS, EXPLORER_SCHEMA, EXPLORER_SHIELDED_TRANSACTION_BY_CLASS_LOC,
     EXPLORER_TRANSACTION_BY_KIND_LOC, EXPLORER_TRANSACTION_META_BY_LOC,
+};
+pub use refill_transaction_amounts::{
+    refill_transaction_amounts, RefillTransactionAmountsError, RefillTransactionAmountsOptions,
+    RefillTransactionAmountsSummary,
 };
 pub(crate) use transactions::*;
 

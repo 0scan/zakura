@@ -9,6 +9,10 @@ pub(crate) mod read;
 mod storage;
 mod types;
 
+pub use storage::{
+    refill_transaction_amounts, RefillTransactionAmountsError, RefillTransactionAmountsOptions,
+    RefillTransactionAmountsSummary,
+};
 pub(crate) use storage::{
     ExplorerBlockCommitContext, PendingExplorerAddressRecords, EXPLORER_ADDRESS_META,
     EXPLORER_BALANCE_ORDER, EXPLORER_BLOCK_STATS, EXPLORER_CHAIN_STATS, EXPLORER_DAILY_STATS,
