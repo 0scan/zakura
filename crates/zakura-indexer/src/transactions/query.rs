@@ -20,6 +20,7 @@ use crate::{
 use super::{
     classify::{
         public_flow_amount, shielded_flow, shielded_pool, shielded_value_balance, transaction_kind,
+        transparent_input_total,
     },
     cursor::TransactionCursor,
     filter::{TransactionKindFilter, TransactionQuery},
@@ -213,6 +214,9 @@ fn transaction_list_item(
         fee: record.fee_zat.to_string(),
         vin_count: record.transparent_input_count,
         vout_count: record.transparent_output_count,
+        total_input: transparent_input_total(&record)?.to_string(),
+        total_output: record.transparent_output_total_zat.to_string(),
+        value_balance_transparent: record.transparent_value_balance_zat.to_string(),
         shielded_value_balance: shielded_value_balance(&record)?.to_string(),
         value_balance_sapling: record.sapling_value_balance_zat.to_string(),
         value_balance_orchard: record.orchard_value_balance_zat.to_string(),

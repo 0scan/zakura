@@ -121,6 +121,15 @@ pub struct TransactionListItem {
     /// Number of transparent outputs.
     pub vout_count: u32,
 
+    /// Sum of transparent input values in zatoshis.
+    pub total_input: String,
+
+    /// Sum of transparent output values in zatoshis.
+    pub total_output: String,
+
+    /// Transparent value balance in zatoshis.
+    pub value_balance_transparent: String,
+
     /// Combined shielded transaction value balance in zatoshis.
     pub shielded_value_balance: String,
 

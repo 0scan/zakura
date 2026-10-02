@@ -19,7 +19,7 @@ use crate::{ExplorerBlockStats, ExplorerChainStats, ExplorerDailyStats};
 pub(crate) struct ExplorerSchemaVersion(pub(crate) u32);
 
 impl ExplorerSchemaVersion {
-    pub(crate) const CURRENT: Self = Self(1);
+    pub(crate) const CURRENT: Self = Self(2);
 }
 
 impl IntoDisk for ExplorerSchemaVersion {
@@ -214,6 +214,7 @@ pub struct ExplorerTransactionRecord {
     pub sapling_output_count: u32,
     pub orchard_action_count: u32,
     pub ironwood_action_count: u32,
+    pub transparent_output_total_zat: i64,
 }
 
 /// Compact canonical activity positions for one transparent address.
@@ -339,7 +340,7 @@ pub struct ExplorerShieldedClassLocation {
     pub location: TransactionLocation,
 }
 
-const EXPLORER_TRANSACTION_RECORD_BYTES: usize = 72;
+const EXPLORER_TRANSACTION_RECORD_BYTES: usize = 80;
 const EXPLORER_ADDRESS_RECORD_BYTES: usize = 24;
 
 impl IntoDisk for ExplorerAddressRecord {
@@ -403,6 +404,11 @@ impl IntoDisk for ExplorerTransactionRecord {
         ] {
             put(&mut bytes, &mut offset, &value.to_be_bytes());
         }
+        put(
+            &mut bytes,
+            &mut offset,
+            &self.transparent_output_total_zat.to_be_bytes(),
+        );
         debug_assert_eq!(offset, EXPLORER_TRANSACTION_RECORD_BYTES);
         bytes
     }
@@ -427,6 +433,7 @@ impl FromDisk for ExplorerTransactionRecord {
             sapling_output_count: u32::from_be_bytes(take(bytes, &mut offset)),
             orchard_action_count: u32::from_be_bytes(take(bytes, &mut offset)),
             ironwood_action_count: u32::from_be_bytes(take(bytes, &mut offset)),
+            transparent_output_total_zat: i64::from_be_bytes(take(bytes, &mut offset)),
         }
     }
 }
@@ -554,6 +561,7 @@ mod tests {
             sapling_output_count: 9,
             orchard_action_count: 10,
             ironwood_action_count: 11,
+            transparent_output_total_zat: 12,
         };
 
         assert_eq!(

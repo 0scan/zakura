@@ -28,6 +28,7 @@ pub(crate) struct TransactionRecord {
     pub(crate) sapling_output_count: u32,
     pub(crate) orchard_action_count: u32,
     pub(crate) ironwood_action_count: u32,
+    pub(crate) transparent_output_total_zat: i64,
 }
 
 #[cfg(feature = "state-index")]
@@ -54,6 +55,7 @@ impl TransactionRecord {
             sapling_output_count: record.sapling_output_count,
             orchard_action_count: record.orchard_action_count,
             ironwood_action_count: record.ironwood_action_count,
+            transparent_output_total_zat: record.transparent_output_total_zat,
         }
     }
 }

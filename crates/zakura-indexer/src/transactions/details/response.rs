@@ -325,6 +325,7 @@ fn validate_indexed_record(
         && response.transaction.fee == record.fee_zat.to_string()
         && indexed_input_count == record.transparent_input_count
         && response.transaction.vout_count == record.transparent_output_count
+        && response.transaction.total_output == record.transparent_output_total_zat.to_string()
         && response.transaction.value_balance_transparent
             == record.transparent_value_balance_zat.to_string()
         && response.transaction.value_balance_sapling

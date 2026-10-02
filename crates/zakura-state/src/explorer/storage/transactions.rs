@@ -587,6 +587,13 @@ impl ExplorerTransactionFacts {
             sapling_output_count: count_u32(transaction.sapling_outputs().count()),
             orchard_action_count: count_u32(transaction.orchard_actions().count()),
             ironwood_action_count: count_u32(transaction.ironwood_actions().count()),
+            transparent_output_total_zat: transaction
+                .outputs()
+                .iter()
+                .try_fold(0_i64, |total, output| {
+                    total.checked_add(output.value().zatoshis())
+                })
+                .expect("verified transparent output total fits in the money range"),
         };
         let kind = transaction_kind(transaction_index, &record);
         let shielded_classification = (kind == ExplorerTransactionKind::Shielded).then(|| {

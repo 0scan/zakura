@@ -90,6 +90,7 @@ pub fn classify_unmined_transaction(
             transaction.ironwood_actions().count(),
             "Ironwood action count",
         )?,
+        transparent_output_total_zat: total_output,
     };
 
     Ok(TransactionClassification {
@@ -172,6 +173,24 @@ pub(super) fn shielded_value_balance(record: &TransactionRecord) -> Result<i64, 
     })
 }
 
+pub(super) fn transparent_input_total(record: &TransactionRecord) -> Result<i64, Error> {
+    if transaction_kind(record) == TransactionKind::Coinbase {
+        return Ok(0);
+    }
+
+    let total = record
+        .transparent_output_total_zat
+        .checked_add(record.transparent_value_balance_zat)
+        .ok_or_else(|| Error::Calculation("transparent input total exceeds i64".to_string()))?;
+    if total < 0 {
+        return Err(Error::CorruptData(
+            "transparent input total is negative".to_string(),
+        ));
+    }
+
+    Ok(total)
+}
+
 fn count_u32(value: usize, name: &str) -> Result<u32, Error> {
     u32::try_from(value).map_err(|_| Error::Calculation(format!("{name} exceeds u32")))
 }
@@ -214,6 +233,18 @@ mod tests {
         assert_eq!(shielded_pool(&record), Some(ShieldedPool::Mixed));
     }
 
+    #[test]
+    fn derives_transparent_input_total_from_indexed_output_and_balance() {
+        let mut record = test_record();
+        record.transparent_output_total_zat = 75;
+        record.transparent_value_balance_zat = 25;
+
+        assert_eq!(transparent_input_total(&record).unwrap(), 100);
+
+        record.position.transaction_index = 0;
+        assert_eq!(transparent_input_total(&record).unwrap(), 0);
+    }
+
     fn test_record() -> TransactionRecord {
         TransactionRecord {
             position: TransactionPosition {
@@ -233,6 +264,7 @@ mod tests {
             sapling_output_count: 0,
             orchard_action_count: 0,
             ironwood_action_count: 0,
+            transparent_output_total_zat: 0,
         }
     }
 }

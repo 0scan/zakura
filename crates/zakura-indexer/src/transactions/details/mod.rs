@@ -96,6 +96,11 @@ mod tests {
         let block_time = block.header.time;
         let transaction_size = u32::try_from(transaction.zcash_serialized_size())
             .expect("test transaction size fits in u32");
+        let transparent_output_total_zat = transaction
+            .outputs()
+            .iter()
+            .map(|output| output.value().zatoshis())
+            .sum();
 
         let read_state = service_fn(move |request: ReadRequest| {
             let transaction = transaction.clone();
@@ -135,6 +140,7 @@ mod tests {
                                     sapling_output_count: 0,
                                     orchard_action_count: 0,
                                     ironwood_action_count: 0,
+                                    transparent_output_total_zat,
                                 },
                             },
                         )))
