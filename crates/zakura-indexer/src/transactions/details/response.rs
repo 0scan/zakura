@@ -19,7 +19,10 @@ use crate::{
     Error,
 };
 
-use super::super::classify::{public_flow_amount, shielded_flow, shielded_pool, transaction_kind};
+use super::super::{
+    classify::{public_flow_amount, shielded_flow, shielded_pool, transaction_kind},
+    primary_transaction_endpoints, response_endpoint,
+};
 
 /// Canonical block context for one transaction response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,6 +266,23 @@ fn build_transaction(
     let serialized = transaction
         .zcash_serialize_to_vec()
         .map_err(|error| Error::Calculation(error.to_string()))?;
+    let spent_outputs = transaction
+        .inputs()
+        .iter()
+        .filter_map(Input::outpoint)
+        .map(|outpoint| {
+            transparent_inputs
+                .get(&outpoint)
+                .map(|utxo| utxo.output.clone())
+                .ok_or_else(|| {
+                    Error::StateResponse(format!(
+                        "missing loaded transparent output for {outpoint:?}"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let (primary_from, primary_to) =
+        primary_transaction_endpoints(transaction, network, &spent_outputs)?;
 
     let transaction = TransactionData {
         txid: txid.to_string(),
@@ -278,6 +298,8 @@ fn build_transaction(
             .map(|height| height.0.to_string()),
         auth_digest: transaction.auth_digest().map(|digest| digest.to_string()),
         overwintered: transaction.is_overwintered(),
+        primary_from,
+        primary_to,
         vin_count: count_u32(transaction.inputs().len(), "transparent input count")?,
         vout_count: count_u32(transaction.outputs().len(), "transparent output count")?,
         value_balance: value_balance.to_string(),
@@ -323,8 +345,11 @@ fn validate_indexed_record(
     };
     let matches = response.transaction.size == record.serialized_size
         && response.transaction.fee == record.fee_zat.to_string()
+        && response.transaction.primary_from == response_endpoint(record.primary_from)
+        && response.transaction.primary_to == response_endpoint(record.primary_to)
         && indexed_input_count == record.transparent_input_count
         && response.transaction.vout_count == record.transparent_output_count
+        && response.transaction.total_output == record.transparent_output_total_zat.to_string()
         && response.transaction.value_balance_transparent
             == record.transparent_value_balance_zat.to_string()
         && response.transaction.value_balance_sapling

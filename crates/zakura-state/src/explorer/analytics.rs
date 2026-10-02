@@ -94,6 +94,7 @@ pub(super) fn derive_block_stats(
         let record = explorer_transaction_record_with_utxos(
             transaction,
             transaction_index,
+            network,
             &transaction_utxos,
         );
         transaction_stats.record(

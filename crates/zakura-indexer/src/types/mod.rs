@@ -34,8 +34,8 @@ pub use top_balances::{
     TopBalancesSummary,
 };
 pub use transaction::{
-    ShieldedFlow, ShieldedPool, TransactionClassification, TransactionKind, TransactionListItem,
-    TransactionStatus,
+    ShieldedFlow, ShieldedPool, TransactionClassification, TransactionEndpoint,
+    TransactionEndpointType, TransactionKind, TransactionListItem, TransactionStatus,
 };
 pub use transaction_details::TransactionDetails;
 pub use transaction_page::{TransactionsPagination, TransactionsResponse};

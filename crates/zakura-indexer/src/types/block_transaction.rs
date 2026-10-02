@@ -3,6 +3,8 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use super::TransactionEndpoint;
+
 /// Block-independent transaction data shared by confirmed and mempool details.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 pub struct TransactionData {
@@ -32,6 +34,12 @@ pub struct TransactionData {
 
     /// Whether the transaction uses an Overwinter or later format.
     pub overwintered: bool,
+
+    /// Representative source with the largest observable value contribution.
+    pub primary_from: Option<TransactionEndpoint>,
+
+    /// Representative destination receiving the largest observable value.
+    pub primary_to: Option<TransactionEndpoint>,
 
     /// Number of transparent inputs.
     pub vin_count: u32,

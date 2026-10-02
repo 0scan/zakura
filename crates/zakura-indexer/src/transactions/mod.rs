@@ -5,6 +5,7 @@ mod classify;
 mod cursor;
 #[cfg(feature = "state-index")]
 mod details;
+mod endpoints;
 mod filter;
 #[cfg(feature = "state-index")]
 mod query;
@@ -16,6 +17,9 @@ pub(crate) use classify::{shielded_flow, shielded_pool, transaction_kind};
 pub(crate) use details::build_block_transactions;
 #[cfg(feature = "state-index")]
 pub use details::transaction_details_from_state;
+pub use endpoints::primary_transaction_endpoints;
+#[cfg(feature = "state-index")]
+pub(crate) use endpoints::response_endpoint;
 pub use filter::{
     AmountFilter, ShieldedFlowFilter, ShieldedPoolFilter, TransactionKindFilter, TransactionQuery,
 };

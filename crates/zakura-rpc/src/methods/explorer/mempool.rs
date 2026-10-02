@@ -10,10 +10,10 @@ use zakura_chain::{
     transparent::{Input, OutPoint},
 };
 use zakura_indexer::{
-    classify_unmined_transaction, BlockTransactionInput, BlockTransactionOutput, Error,
-    PageDirection, ShieldedFlowFilter, ShieldedPoolFilter, TransactionClassification,
-    TransactionData, TransactionKind, TransactionKindFilter, TransactionStatus,
-    TransactionsPagination,
+    classify_unmined_transaction, primary_transaction_endpoints, BlockTransactionInput,
+    BlockTransactionOutput, Error, PageDirection, ShieldedFlowFilter, ShieldedPoolFilter,
+    TransactionClassification, TransactionData, TransactionKind, TransactionKindFilter,
+    TransactionStatus, TransactionsPagination,
 };
 use zakura_node_services::mempool::TransactionDependencies;
 
@@ -44,6 +44,7 @@ struct MempoolCursor {
 }
 
 pub(super) fn transactions_page(
+    network: &Network,
     transactions: Vec<VerifiedUnminedTx>,
     dependencies: &TransactionDependencies,
     request: &GetMempoolTransactionsRequest,
@@ -78,6 +79,7 @@ pub(super) fn transactions_page(
         record_summary_transaction(&mut summary, classification.kind)?;
         if query.matches(classification) {
             matches.push(positioned_list_item(
+                network,
                 transaction,
                 dependencies,
                 fee_zat,
@@ -188,12 +190,18 @@ pub(super) fn transaction_details(
 }
 
 fn positioned_list_item(
+    network: &Network,
     transaction: &VerifiedUnminedTx,
     dependencies: &TransactionDependencies,
     fee_zat: u64,
     classification: TransactionClassification,
 ) -> Result<PositionedTransaction, Error> {
     let raw_transaction = transaction.transaction.transaction().as_ref();
+    let (primary_from, primary_to) = primary_transaction_endpoints(
+        raw_transaction,
+        network,
+        transaction.spent_outputs.as_slice(),
+    )?;
 
     let txid = raw_transaction.hash();
     let first_seen = transaction.time.map(|time| time.timestamp());
@@ -218,6 +226,8 @@ fn positioned_list_item(
                 .flow_amount_zat
                 .map(|amount| amount.to_string()),
             fee: fee_zat.to_string(),
+            primary_from,
+            primary_to,
             vin_count: count_u32(raw_transaction.inputs().len(), "transparent input count")?,
             vout_count: count_u32(raw_transaction.outputs().len(), "transparent output count")?,
             total_input: classification.transparent_input_total_zat.to_string(),
@@ -354,6 +364,9 @@ fn transaction_data(
     let serialized = transaction
         .zcash_serialize_to_vec()
         .map_err(|error| Error::Calculation(error.to_string()))?;
+    let fee_zat = fee_zat(verified)?;
+    let (primary_from, primary_to) =
+        primary_transaction_endpoints(transaction, network, verified.spent_outputs.as_slice())?;
 
     Ok(TransactionData {
         txid: txid.to_string(),
@@ -369,6 +382,8 @@ fn transaction_data(
             .map(|height| height.0.to_string()),
         auth_digest: transaction.auth_digest().map(|digest| digest.to_string()),
         overwintered: transaction.is_overwintered(),
+        primary_from,
+        primary_to,
         vin_count: count_u32(transaction.inputs().len(), "transparent input count")?,
         vout_count: count_u32(transaction.outputs().len(), "transparent output count")?,
         value_balance: value_balance.to_string(),
@@ -384,7 +399,7 @@ fn transaction_data(
         sapling_output_count,
         orchard_actions,
         ironwood_actions,
-        fee: fee_zat(verified)?.to_string(),
+        fee: fee_zat.to_string(),
         total_input: total_input.to_string(),
         total_output: total_output.to_string(),
         is_coinbase: false,
@@ -605,6 +620,7 @@ mod tests {
     #[test]
     fn empty_mempool_uses_the_shared_pagination_contract() {
         let response = transactions_page(
+            &Network::Mainnet,
             Vec::new(),
             &TransactionDependencies::default(),
             &GetMempoolTransactionsRequest::default(),
@@ -627,7 +643,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = transactions_page(Vec::new(), &TransactionDependencies::default(), &request);
+        let result = transactions_page(
+            &Network::Mainnet,
+            Vec::new(),
+            &TransactionDependencies::default(),
+            &request,
+        );
 
         assert!(matches!(result, Err(Error::InvalidCursor(_))));
     }
