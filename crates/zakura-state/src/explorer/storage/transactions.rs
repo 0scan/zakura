@@ -5,13 +5,11 @@ use std::{
     ops::Bound::{Excluded, Included},
 };
 
-use zakura_chain::amount::NegativeAllowed;
 use zakura_chain::{
     parameters::Network,
     serialization::ZcashSerialize,
-    transaction::{primary_value_endpoints, Transaction, TransactionValueEndpoint},
-    transparent::{OrderedUtxo, OutPoint, Output, Utxo},
-    value_balance::ValueBalance,
+    transaction::{transaction_value_endpoints, Transaction, TransactionValueEndpoints},
+    transparent::{OrderedUtxo, OutPoint, Utxo},
 };
 
 use crate::{
@@ -335,29 +333,10 @@ impl DiskWriteBatch {
             }
 
             if !finalized.height.is_min() {
-                let mut address_funding = HashMap::new();
-                for outpoint in transaction
-                    .inputs()
-                    .iter()
-                    .filter_map(|input| input.outpoint())
+                for (address, received_value_zat) in facts
+                    .value_endpoints
+                    .into_transparent_address_received_values()
                 {
-                    if let Some(address) = spent_utxos
-                        .get(&outpoint)
-                        .and_then(|utxo| utxo.output.address(network))
-                    {
-                        address_funding.entry(address).or_insert(false);
-                    }
-                }
-                for output in transaction.outputs() {
-                    if let Some(address) = output.address(network) {
-                        let received = output.value().zatoshis() > 0;
-                        address_funding
-                            .entry(address)
-                            .and_modify(|funded| *funded |= received)
-                            .or_insert(received);
-                    }
-                }
-                for (address, received) in address_funding {
                     let record = address_records.entry(address).or_insert_with(|| {
                         zakura_db.explorer_address_record(address).unwrap_or(
                             ExplorerAddressRecord {
@@ -373,7 +352,7 @@ impl DiskWriteBatch {
                         .checked_add(1)
                         .expect("address transaction count fits in u64");
                     record.last_location = location;
-                    if received && record.first_funding_location.is_none() {
+                    if received_value_zat > 0 && record.first_funding_location.is_none() {
                         record.first_funding_location = Some(location);
                     }
                 }
@@ -488,6 +467,7 @@ struct ExplorerTransactionFacts {
         ExplorerShieldedPool,
         ExplorerAmountBucket,
     )>,
+    value_endpoints: TransactionValueEndpoints,
 }
 
 pub(crate) fn explorer_transaction_record_with_ordered_utxos(
@@ -530,20 +510,13 @@ impl ExplorerTransactionFacts {
         let is_coinbase = transaction.is_coinbase();
         debug_assert_eq!(is_coinbase, transaction_index == 0);
 
-        let value_balance = (!is_coinbase).then(|| {
-            transaction
-                .value_balance(spent_utxos)
-                .expect("verified transaction inputs have already-resolved value balances")
-        });
-        let spent_outputs = spent_output_refs(transaction, spent_utxos);
-        let primary_endpoints = primary_value_endpoints(transaction, network, &spent_outputs)
-            .expect("verified transaction inputs have valid value balances");
-        Self::from_value_balance(
+        let value_endpoints = transaction_value_endpoints(
             transaction,
-            transaction_index,
-            value_balance,
-            primary_endpoints,
+            network,
+            resolved_spent_outputs(transaction, spent_utxos),
         )
+        .expect("verified transaction inputs have valid value balances");
+        Self::from_value_endpoints(transaction, transaction_index, value_endpoints)
     }
 
     pub(crate) fn from_verified_transaction_with_ordered_utxos(
@@ -554,32 +527,24 @@ impl ExplorerTransactionFacts {
     ) -> Self {
         let is_coinbase = transaction.is_coinbase();
         debug_assert_eq!(is_coinbase, transaction_index == 0);
-        let value_balance = (!is_coinbase).then(|| {
-            transaction
-                .value_balance_from_ordered_utxos(spent_utxos)
-                .expect("verified transaction inputs have already-resolved value balances")
-        });
-        let spent_outputs = spent_output_refs(transaction, spent_utxos);
-        let primary_endpoints = primary_value_endpoints(transaction, network, &spent_outputs)
-            .expect("verified transaction inputs have valid value balances");
-        Self::from_value_balance(
+        let value_endpoints = transaction_value_endpoints(
             transaction,
-            transaction_index,
-            value_balance,
-            primary_endpoints,
+            network,
+            resolved_spent_outputs(transaction, spent_utxos),
         )
+        .expect("verified transaction inputs have valid value balances");
+        Self::from_value_endpoints(transaction, transaction_index, value_endpoints)
     }
 
-    fn from_value_balance(
+    fn from_value_endpoints(
         transaction: &Transaction,
         transaction_index: usize,
-        value_balance: Option<ValueBalance<NegativeAllowed>>,
-        (primary_from, primary_to): (
-            Option<TransactionValueEndpoint>,
-            Option<TransactionValueEndpoint>,
-        ),
+        value_endpoints: TransactionValueEndpoints,
     ) -> Self {
         let is_coinbase = transaction.is_coinbase();
+        let (primary_from, primary_to) = value_endpoints.primary_endpoints();
+        let transaction_value_balance = value_endpoints.value_balance();
+        let value_balance = (!is_coinbase).then_some(transaction_value_balance);
         let (fee_zat, transparent_value_balance_zat) = value_balance.map_or((0, 0), |balance| {
             let fee = balance
                 .remaining_transaction_value()
@@ -595,18 +560,9 @@ impl ExplorerTransactionFacts {
                 .expect("verified transaction size is bounded by the maximum block size"),
             fee_zat,
             transparent_value_balance_zat,
-            sapling_value_balance_zat: transaction
-                .sapling_value_balance()
-                .sapling_amount()
-                .zatoshis(),
-            orchard_value_balance_zat: transaction
-                .orchard_value_balance()
-                .orchard_amount()
-                .zatoshis(),
-            ironwood_value_balance_zat: transaction
-                .ironwood_value_balance()
-                .ironwood_amount()
-                .zatoshis(),
+            sapling_value_balance_zat: transaction_value_balance.sapling_amount().zatoshis(),
+            orchard_value_balance_zat: transaction_value_balance.orchard_amount().zatoshis(),
+            ironwood_value_balance_zat: transaction_value_balance.ironwood_amount().zatoshis(),
             transparent_input_count: if is_coinbase {
                 0
             } else {
@@ -618,13 +574,7 @@ impl ExplorerTransactionFacts {
             sapling_output_count: count_u32(transaction.sapling_outputs().count()),
             orchard_action_count: count_u32(transaction.orchard_actions().count()),
             ironwood_action_count: count_u32(transaction.ironwood_actions().count()),
-            transparent_output_total_zat: transaction
-                .outputs()
-                .iter()
-                .try_fold(0_i64, |total, output| {
-                    total.checked_add(output.value().zatoshis())
-                })
-                .expect("verified transparent output total fits in the money range"),
+            transparent_output_total_zat: value_endpoints.transparent_output_total_zat(),
             primary_from,
             primary_to,
         };
@@ -656,14 +606,15 @@ impl ExplorerTransactionFacts {
             record,
             kind,
             shielded_classification,
+            value_endpoints,
         }
     }
 }
 
-fn spent_output_refs<'a, U>(
-    transaction: &Transaction,
+fn resolved_spent_outputs<'a, U>(
+    transaction: &'a Transaction,
     spent_utxos: &'a HashMap<OutPoint, U>,
-) -> Vec<&'a Output>
+) -> impl Iterator<Item = &'a zakura_chain::transparent::Output>
 where
     U: AsRef<Utxo>,
 {
@@ -678,7 +629,6 @@ where
                 .as_ref()
                 .output
         })
-        .collect()
 }
 
 fn transaction_kind(

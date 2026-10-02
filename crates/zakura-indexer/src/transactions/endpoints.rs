@@ -21,8 +21,7 @@ pub fn primary_transaction_endpoints(
     network: &Network,
     spent_outputs: &[Output],
 ) -> Result<(Option<TransactionEndpoint>, Option<TransactionEndpoint>), Error> {
-    let spent_outputs = spent_outputs.iter().collect::<Vec<_>>();
-    let (primary_from, primary_to) = primary_value_endpoints(transaction, network, &spent_outputs)
+    let (primary_from, primary_to) = primary_value_endpoints(transaction, network, spent_outputs)
         .map_err(|error| Error::Calculation(error.to_string()))?;
     Ok((
         response_endpoint(primary_from),

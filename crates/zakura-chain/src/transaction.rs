@@ -38,7 +38,8 @@ pub use unmined::{
     zip317, UnminedTx, UnminedTxId, VerifiedUnminedTx, MEMPOOL_TRANSACTION_COST_THRESHOLD,
 };
 pub use value_endpoints::{
-    primary_value_endpoints, PrimaryValueEndpointsError, TransactionValueEndpoint,
+    primary_value_endpoints, transaction_value_endpoints, PrimaryValueEndpointsError,
+    TransactionValueEndpoint, TransactionValueEndpoints,
 };
 use zcash_protocol::consensus;
 
