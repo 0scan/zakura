@@ -1,8 +1,9 @@
 //! One-time offline refill for explorer transaction metadata.
 
+mod prepared_refill;
 mod source_transactions;
 
-use std::time::Instant;
+use std::{ops::Bound, path::PathBuf, time::Instant};
 
 use rayon::ThreadPoolBuilder;
 use semver::Version;
@@ -30,6 +31,12 @@ use super::{
 };
 use source_transactions::{
     upgrade_transaction_entries, LegacyTransactionEntry, SourceTransactionCache,
+    UpgradedTransactionEntry,
+};
+
+pub use prepared_refill::{
+    apply_prepared_transaction_amount_refill, prepare_transaction_amount_refill,
+    AppliedPreparedTransactionAmountRefillSummary, PreparedTransactionAmountRefillSummary,
 };
 
 const EXPLORER_SCHEMA_V1: u32 = 1;
@@ -185,6 +192,67 @@ pub enum RefillTransactionAmountsError {
     /// RocksDB rejected a write or flush.
     #[error("RocksDB operation failed")]
     RocksDb(#[from] rocksdb::Error),
+
+    /// The prepared refill artifact could not be read or written.
+    #[error("prepared refill artifact I/O failed at {path}")]
+    PreparedFileIo {
+        /// Artifact path involved in the failed operation.
+        path: PathBuf,
+        /// Underlying filesystem error.
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Refusing to replace an existing prepared refill artifact.
+    #[error("prepared refill artifact already exists at {0}")]
+    PreparedFileAlreadyExists(PathBuf),
+
+    /// A prepared refill artifact is incomplete, corrupt, or from an unsupported format.
+    #[error("invalid prepared refill artifact at {path}: {reason}")]
+    InvalidPreparedFile {
+        /// Artifact path that failed validation.
+        path: PathBuf,
+        /// Concise validation failure.
+        reason: String,
+    },
+
+    /// The artifact was prepared from a different network kind.
+    #[error(
+        "prepared refill network mismatch: artifact is {prepared:?}, requested database is {requested:?}"
+    )]
+    PreparedNetworkMismatch {
+        /// Network encoded in the artifact.
+        prepared: zakura_chain::parameters::NetworkKind,
+        /// Network requested for the target database.
+        requested: zakura_chain::parameters::NetworkKind,
+    },
+
+    /// The target database does not contain the artifact's source chain tip.
+    #[error(
+        "prepared refill source tip mismatch at {height:?}: artifact has {prepared_hash}, database has {database_hash:?}"
+    )]
+    PreparedTipMismatch {
+        /// Height captured when the artifact was prepared.
+        height: zakura_chain::block::Height,
+        /// Finalized block hash captured at that height.
+        prepared_hash: zakura_chain::block::Hash,
+        /// Finalized block hash currently stored at that height, if any.
+        database_hash: Option<zakura_chain::block::Hash>,
+    },
+
+    /// Preparing an artifact requires a non-empty finalized chain.
+    #[error("cannot prepare a transaction refill artifact from an empty database")]
+    EmptyDatabase,
+
+    /// A prepared artifact must contain every transaction row in its source snapshot.
+    #[error(
+        "cannot prepare from a partially refilled database: found {0} version-two transaction records"
+    )]
+    PartiallyRefilledDatabase(u64),
+
+    /// A prepared artifact is unnecessary and incomplete after the schema marker advances.
+    #[error("cannot prepare a transaction refill artifact after the explorer schema reached version two")]
+    ExplorerSchemaAlreadyCurrent,
 }
 
 /// Refill transaction amounts and primary endpoints, then advance explorer schema v1 to v2.
@@ -196,31 +264,19 @@ pub fn refill_transaction_amounts(
     network: &Network,
     options: RefillTransactionAmountsOptions,
 ) -> Result<RefillTransactionAmountsSummary, RefillTransactionAmountsError> {
-    if options.batch_size == 0 {
-        return Err(RefillTransactionAmountsError::InvalidBatchSize);
-    }
-    if options.workers == 0 {
-        return Err(RefillTransactionAmountsError::InvalidWorkerCount);
-    }
-    let worker_pool = ThreadPoolBuilder::new()
-        .num_threads(options.workers)
-        .thread_name(|index| format!("explorer-refill-{index}"))
-        .build()?;
+    refill_transaction_amounts_from(config, network, options, None)
+}
 
-    check_format_version(&config, network)?;
+fn refill_transaction_amounts_from(
+    config: Config,
+    network: &Network,
+    options: RefillTransactionAmountsOptions,
+    start_after: Option<TransactionLocation>,
+) -> Result<RefillTransactionAmountsSummary, RefillTransactionAmountsError> {
     let started = Instant::now();
-    let db = ZakuraDb::new_for_explorer_amount_refill(&config, network, options.dry_run)?;
-    if db.is_pruned() {
-        return Err(RefillTransactionAmountsError::PrunedDatabase);
-    }
-
-    let schema_cf =
-        TypedColumnFamily::<(), ExplorerSchemaVersion>::new(db.disk_db(), EXPLORER_SCHEMA)
-            .expect("explorer schema column family is registered");
-    let schema = schema_cf
-        .zs_get(&())
-        .ok_or(RefillTransactionAmountsError::MissingExplorerSchema)?;
-    if schema == ExplorerSchemaVersion::CURRENT {
+    let worker_pool = refill_worker_pool(options)?;
+    let db = open_refill_database(&config, network, options.dry_run)?;
+    if explorer_schema_is_current(&db)? {
         return Ok(RefillTransactionAmountsSummary {
             scanned_records: 0,
             refilled_records: 0,
@@ -230,12 +286,132 @@ pub fn refill_transaction_amounts(
             elapsed_seconds: started.elapsed().as_secs(),
         });
     }
+
+    let metadata_handle = db
+        .disk_db()
+        .cf_handle(EXPLORER_TRANSACTION_META_BY_LOC)
+        .expect("explorer transaction metadata column family is registered");
+    let calculation = calculate_refill_records(
+        &db,
+        network,
+        options,
+        &worker_pool,
+        start_after,
+        |upgraded_entries| {
+            if options.dry_run || upgraded_entries.is_empty() {
+                return Ok(());
+            }
+
+            let mut batch = DiskWriteBatch::new();
+            for upgraded in upgraded_entries {
+                batch.zs_insert(&metadata_handle, upgraded.location, upgraded.record);
+            }
+            db.write_batch(batch)?;
+            Ok(())
+        },
+    )?;
+
+    let schema_updated = if options.dry_run {
+        false
+    } else {
+        if calculation.scan_complete {
+            let schema_cf =
+                TypedColumnFamily::<(), ExplorerSchemaVersion>::new(db.disk_db(), EXPLORER_SCHEMA)
+                    .expect("explorer schema column family is registered");
+            let mut batch = DiskWriteBatch::new();
+            let _ = schema_cf
+                .with_batch_for_writing(&mut batch)
+                .zs_insert(&(), &ExplorerSchemaVersion::CURRENT);
+            db.write_batch(batch)?;
+        }
+        db.flush()?;
+        calculation.scan_complete
+    };
+
+    Ok(RefillTransactionAmountsSummary {
+        scanned_records: calculation.scanned_records,
+        refilled_records: calculation.refilled_records,
+        already_refilled_records: calculation.already_refilled_records,
+        scan_complete: calculation.scan_complete,
+        schema_updated,
+        elapsed_seconds: started.elapsed().as_secs(),
+    })
+}
+
+struct RefillCalculationSummary {
+    scanned_records: u64,
+    refilled_records: u64,
+    already_refilled_records: u64,
+    scan_complete: bool,
+}
+
+fn refill_worker_pool(
+    options: RefillTransactionAmountsOptions,
+) -> Result<rayon::ThreadPool, RefillTransactionAmountsError> {
+    validate_refill_options(options)?;
+
+    Ok(ThreadPoolBuilder::new()
+        .num_threads(options.workers)
+        .thread_name(|index| format!("explorer-refill-{index}"))
+        .build()?)
+}
+
+fn validate_refill_options(
+    options: RefillTransactionAmountsOptions,
+) -> Result<(), RefillTransactionAmountsError> {
+    if options.batch_size == 0 {
+        return Err(RefillTransactionAmountsError::InvalidBatchSize);
+    }
+    if options.workers == 0 {
+        return Err(RefillTransactionAmountsError::InvalidWorkerCount);
+    }
+
+    Ok(())
+}
+
+fn open_refill_database(
+    config: &Config,
+    network: &Network,
+    read_only: bool,
+) -> Result<ZakuraDb, RefillTransactionAmountsError> {
+    check_format_version(config, network)?;
+    let db = ZakuraDb::new_for_explorer_amount_refill(config, network, read_only)?;
+    if db.is_pruned() {
+        return Err(RefillTransactionAmountsError::PrunedDatabase);
+    }
+
+    Ok(db)
+}
+
+fn explorer_schema_is_current(db: &ZakuraDb) -> Result<bool, RefillTransactionAmountsError> {
+    let schema_cf =
+        TypedColumnFamily::<(), ExplorerSchemaVersion>::new(db.disk_db(), EXPLORER_SCHEMA)
+            .expect("explorer schema column family is registered");
+    let schema = schema_cf
+        .zs_get(&())
+        .ok_or(RefillTransactionAmountsError::MissingExplorerSchema)?;
+    if schema == ExplorerSchemaVersion::CURRENT {
+        return Ok(true);
+    }
     if schema.0 != EXPLORER_SCHEMA_V1 {
         return Err(RefillTransactionAmountsError::UnsupportedExplorerSchema(
             schema.0,
         ));
     }
 
+    Ok(false)
+}
+
+fn calculate_refill_records(
+    db: &ZakuraDb,
+    network: &Network,
+    options: RefillTransactionAmountsOptions,
+    worker_pool: &rayon::ThreadPool,
+    start_after: Option<TransactionLocation>,
+    mut consume_batch: impl FnMut(
+        Vec<UpgradedTransactionEntry>,
+    ) -> Result<(), RefillTransactionAmountsError>,
+) -> Result<RefillCalculationSummary, RefillTransactionAmountsError> {
     let metadata_cf = TypedColumnFamily::<TransactionLocation, RawBytes>::new(
         db.disk_db(),
         EXPLORER_TRANSACTION_META_BY_LOC,
@@ -244,10 +420,14 @@ pub fn refill_transaction_amounts(
     let transaction_cf =
         TypedColumnFamily::<TransactionLocation, Transaction>::new(db.disk_db(), "tx_by_loc")
             .expect("raw transaction column family is registered");
+    let refill_range = (
+        start_after.map_or(Bound::Unbounded, Bound::Excluded),
+        Bound::Unbounded,
+    );
 
     let mut already_refilled_records = 0_u64;
     let mut first_legacy_location = None;
-    for (location, record) in metadata_cf.zs_forward_range_iter(..) {
+    for (location, record) in metadata_cf.zs_forward_range_iter(refill_range) {
         match record.raw_bytes().len() {
             EXPLORER_TRANSACTION_RECORD_V1_BYTES => {
                 first_legacy_location = Some(location);
@@ -268,24 +448,11 @@ pub fn refill_transaction_amounts(
     }
 
     let Some(first_legacy_location) = first_legacy_location else {
-        let schema_updated = if options.dry_run {
-            false
-        } else {
-            let mut batch = DiskWriteBatch::new();
-            let _ = schema_cf
-                .with_batch_for_writing(&mut batch)
-                .zs_insert(&(), &ExplorerSchemaVersion::CURRENT);
-            db.write_batch(batch)?;
-            db.flush()?;
-            true
-        };
-        return Ok(RefillTransactionAmountsSummary {
+        return Ok(RefillCalculationSummary {
             scanned_records: 0,
             refilled_records: 0,
             already_refilled_records,
             scan_complete: true,
-            schema_updated,
-            elapsed_seconds: started.elapsed().as_secs(),
         });
     };
 
@@ -293,14 +460,8 @@ pub fn refill_transaction_amounts(
         .zs_forward_range_iter(first_legacy_location..)
         .peekable();
     let mut transaction_iter = transaction_cf.zs_forward_range_iter(first_legacy_location..);
-    let mut batch = DiskWriteBatch::new();
-    let metadata_handle = db
-        .disk_db()
-        .cf_handle(EXPLORER_TRANSACTION_META_BY_LOC)
-        .expect("explorer transaction metadata column family is registered");
     let mut scanned_records = 0_u64;
     let mut refilled_records = 0_u64;
-    let mut pending_writes = 0_usize;
     let mut scan_complete = true;
     let mut source_cache = SourceTransactionCache::new(options.source_cache_entries);
 
@@ -357,34 +518,24 @@ pub fn refill_transaction_amounts(
         }
 
         let upgraded_entries = upgrade_transaction_entries(
-            &db,
+            db,
             &transaction_cf,
             network,
-            &worker_pool,
+            worker_pool,
             &mut source_cache,
             &legacy_entries,
         )?;
-        for upgraded in upgraded_entries {
-            if !options.dry_run {
-                batch.zs_insert(&metadata_handle, upgraded.location, upgraded.record);
-                pending_writes += 1;
-            }
-            refilled_records = refilled_records
-                .checked_add(1)
-                .expect("transaction count fits in u64");
-        }
-
-        if pending_writes >= options.batch_size {
-            db.write_batch(batch)?;
-            tracing::info!(
-                refilled_records,
-                workers = options.workers,
-                source_cache_entries = options.source_cache_entries,
-                "refilled explorer transaction amounts"
-            );
-            batch = DiskWriteBatch::new();
-            pending_writes = 0;
-        }
+        let upgraded_count = count_as_u64(upgraded_entries.len());
+        consume_batch(upgraded_entries)?;
+        refilled_records = refilled_records
+            .checked_add(upgraded_count)
+            .expect("transaction count fits in u64");
+        tracing::info!(
+            refilled_records,
+            workers = options.workers,
+            source_cache_entries = options.source_cache_entries,
+            "calculated explorer transaction metadata"
+        );
 
         if options.limit.is_some_and(|limit| refilled_records >= limit) {
             scan_complete = metadata_iter.peek().is_none();
@@ -392,28 +543,11 @@ pub fn refill_transaction_amounts(
         }
     }
 
-    let schema_updated = if options.dry_run {
-        false
-    } else {
-        if scan_complete {
-            let _ = schema_cf
-                .with_batch_for_writing(&mut batch)
-                .zs_insert(&(), &ExplorerSchemaVersion::CURRENT);
-        }
-        if pending_writes > 0 || scan_complete {
-            db.write_batch(batch)?;
-        }
-        db.flush()?;
-        scan_complete
-    };
-
-    Ok(RefillTransactionAmountsSummary {
+    Ok(RefillCalculationSummary {
         scanned_records,
         refilled_records,
         already_refilled_records,
         scan_complete,
-        schema_updated,
-        elapsed_seconds: started.elapsed().as_secs(),
     })
 }
 
@@ -438,11 +572,15 @@ fn default_worker_count() -> usize {
         .unwrap_or(1)
 }
 
+fn count_as_u64(count: usize) -> u64 {
+    u64::try_from(count).expect("supported targets have at most 64-bit usize values")
+}
+
 #[cfg(test)]
 mod tests {
     use zakura_chain::{
         amount::{Amount, NonNegative},
-        block::Height,
+        block::{self, Height},
         parameters::{testnet::RegtestParameters, NetworkKind},
         transaction::{LockTime, TransactionValueEndpoint},
         transparent::{Address, Input, Output, Script},
@@ -606,5 +744,215 @@ mod tests {
                 .primary_from,
             Some(TransactionValueEndpoint::Coinbase)
         );
+    }
+
+    #[test]
+    fn prepared_refill_imports_snapshot_and_calculates_missing_tail() {
+        let fixture = legacy_refill_fixture();
+        let artifact_dir = tempfile::tempdir().expect("temporary artifact directory is created");
+        let artifact_path = artifact_dir.path().join("transaction-refill.zkr");
+
+        let prepared = prepare_transaction_amount_refill(
+            fixture.config.clone(),
+            &fixture.network,
+            RefillTransactionAmountsOptions::default(),
+            &artifact_path,
+        )
+        .expect("legacy transaction metadata is prepared");
+        assert_eq!(prepared.source_tip_height, Height(2));
+        assert_eq!(prepared.prepared_records, 2);
+
+        let tail_location = TransactionLocation::from_usize(Height(3), 0);
+        let tail_transaction = Transaction::V1 {
+            inputs: vec![Input::Coinbase {
+                height: Height(3),
+                data: vec![0; 8],
+                sequence: u32::MAX,
+            }],
+            outputs: vec![Output::new(
+                Amount::<NonNegative>::try_from(42_000_i64).expect("test amount is in range"),
+                fixture.destination_address.script(),
+            )],
+            lock_time: LockTime::unlocked(),
+        };
+        {
+            let db = open_test_database(&fixture.config, &fixture.network, false);
+            let metadata_handle = db
+                .disk_db()
+                .cf_handle(EXPLORER_TRANSACTION_META_BY_LOC)
+                .expect("metadata column family exists");
+            let transaction_handle = db
+                .disk_db()
+                .cf_handle("tx_by_loc")
+                .expect("transaction column family exists");
+            let hash_by_height = db
+                .disk_db()
+                .cf_handle("hash_by_height")
+                .expect("hash-by-height column family exists");
+            let mut batch = DiskWriteBatch::new();
+            batch.zs_insert(
+                &metadata_handle,
+                tail_location,
+                RawBytes::new_raw_bytes(vec![0; EXPLORER_TRANSACTION_RECORD_V1_BYTES]),
+            );
+            batch.zs_insert(&transaction_handle, tail_location, tail_transaction);
+            batch.zs_insert(&hash_by_height, Height(3), block::Hash([3; 32]));
+            db.write_batch(batch).expect("tail test row is written");
+            db.flush().expect("tail test row is flushed");
+        }
+
+        let applied = apply_prepared_transaction_amount_refill(
+            fixture.config.clone(),
+            &fixture.network,
+            RefillTransactionAmountsOptions::default(),
+            &artifact_path,
+        )
+        .expect("prepared metadata and its missing tail are applied");
+        assert_eq!(applied.imported_records, 2);
+        assert_eq!(applied.tail_refill.refilled_records, 1);
+        assert!(applied.tail_refill.scan_complete);
+        assert!(applied.tail_refill.schema_updated);
+
+        let db = open_test_database(&fixture.config, &fixture.network, true);
+        let source_record = db
+            .explorer_transaction_record(fixture.source_location)
+            .expect("prepared source metadata row exists");
+        assert_eq!(
+            source_record.primary_from,
+            Some(TransactionValueEndpoint::Coinbase)
+        );
+        let spending_record = db
+            .explorer_transaction_record(fixture.spending_location)
+            .expect("prepared spending metadata row exists");
+        assert_eq!(
+            spending_record.primary_from,
+            Some(TransactionValueEndpoint::Transparent(
+                fixture.source_address
+            ))
+        );
+        let tail_record = db
+            .explorer_transaction_record(tail_location)
+            .expect("calculated tail metadata row exists");
+        assert_eq!(tail_record.transparent_output_total_zat, 42_000);
+        assert_eq!(
+            tail_record.primary_from,
+            Some(TransactionValueEndpoint::Coinbase)
+        );
+    }
+
+    struct LegacyRefillFixture {
+        _cache_dir: tempfile::TempDir,
+        config: Config,
+        network: Network,
+        source_address: Address,
+        destination_address: Address,
+        source_location: TransactionLocation,
+        spending_location: TransactionLocation,
+    }
+
+    fn legacy_refill_fixture() -> LegacyRefillFixture {
+        let cache_dir = tempfile::tempdir().expect("temporary cache directory is created");
+        let config = Config {
+            cache_dir: cache_dir.path().to_path_buf(),
+            ..Config::default()
+        };
+        let network = Network::new_regtest(RegtestParameters::default());
+        let source_address = Address::from_script_hash(NetworkKind::Testnet, [1; 20]);
+        let destination_address = Address::from_script_hash(NetworkKind::Testnet, [2; 20]);
+        let source_height = Height(1);
+        let source_transaction = Transaction::V1 {
+            inputs: vec![Input::Coinbase {
+                height: source_height,
+                data: vec![0; 8],
+                sequence: u32::MAX,
+            }],
+            outputs: vec![Output::new(
+                Amount::<NonNegative>::try_from(123_456_i64).expect("test amount is in range"),
+                source_address.script(),
+            )],
+            lock_time: LockTime::unlocked(),
+        };
+        let source_hash = source_transaction.hash();
+        let spending_transaction = Transaction::V1 {
+            inputs: vec![Input::PrevOut {
+                outpoint: OutPoint::from_usize(source_hash, 0),
+                unlock_script: Script::new(&[]),
+                sequence: u32::MAX,
+            }],
+            outputs: vec![Output::new(
+                Amount::<NonNegative>::try_from(120_000_i64).expect("test amount is in range"),
+                destination_address.script(),
+            )],
+            lock_time: LockTime::unlocked(),
+        };
+        let source_location = TransactionLocation::from_usize(source_height, 0);
+        let spending_location = TransactionLocation::from_usize(Height(2), 1);
+        {
+            let db = open_test_database(&config, &network, false);
+            let schema_handle = db
+                .disk_db()
+                .cf_handle(EXPLORER_SCHEMA)
+                .expect("schema column family exists");
+            let metadata_handle = db
+                .disk_db()
+                .cf_handle(EXPLORER_TRANSACTION_META_BY_LOC)
+                .expect("metadata column family exists");
+            let transaction_handle = db
+                .disk_db()
+                .cf_handle("tx_by_loc")
+                .expect("transaction column family exists");
+            let location_handle = db
+                .disk_db()
+                .cf_handle("tx_loc_by_hash")
+                .expect("transaction location column family exists");
+            let hash_by_height = db
+                .disk_db()
+                .cf_handle("hash_by_height")
+                .expect("hash-by-height column family exists");
+            let mut batch = DiskWriteBatch::new();
+            batch.zs_insert(
+                &schema_handle,
+                (),
+                ExplorerSchemaVersion(EXPLORER_SCHEMA_V1),
+            );
+            batch.zs_insert(
+                &metadata_handle,
+                source_location,
+                RawBytes::new_raw_bytes(vec![0; EXPLORER_TRANSACTION_RECORD_V1_BYTES]),
+            );
+            batch.zs_insert(
+                &metadata_handle,
+                spending_location,
+                RawBytes::new_raw_bytes(vec![0; EXPLORER_TRANSACTION_RECORD_V1_BYTES]),
+            );
+            batch.zs_insert(&transaction_handle, source_location, source_transaction);
+            batch.zs_insert(&transaction_handle, spending_location, spending_transaction);
+            batch.zs_insert(&location_handle, source_hash, source_location);
+            batch.zs_insert(&hash_by_height, Height(1), block::Hash([1; 32]));
+            batch.zs_insert(&hash_by_height, Height(2), block::Hash([2; 32]));
+            db.write_batch(batch).expect("legacy test rows are written");
+            db.flush().expect("legacy test rows are flushed");
+        }
+        crate::write_state_database_format_version_to_disk(
+            &config,
+            &state_database_format_version_in_code(),
+            &network,
+        )
+        .expect("test database format version is current");
+
+        LegacyRefillFixture {
+            _cache_dir: cache_dir,
+            config,
+            network,
+            source_address,
+            destination_address,
+            source_location,
+            spending_location,
+        }
+    }
+
+    fn open_test_database(config: &Config, network: &Network, read_only: bool) -> ZakuraDb {
+        ZakuraDb::new_for_explorer_amount_refill(config, network, read_only)
+            .expect("test database opens")
     }
 }

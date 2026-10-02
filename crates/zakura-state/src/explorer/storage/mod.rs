@@ -15,8 +15,10 @@ pub(crate) use columns::{
     EXPLORER_TRANSACTION_BY_KIND_LOC, EXPLORER_TRANSACTION_META_BY_LOC,
 };
 pub use refill_transaction_amounts::{
-    refill_transaction_amounts, RefillTransactionAmountsError, RefillTransactionAmountsOptions,
-    RefillTransactionAmountsSummary,
+    apply_prepared_transaction_amount_refill, prepare_transaction_amount_refill,
+    refill_transaction_amounts, AppliedPreparedTransactionAmountRefillSummary,
+    PreparedTransactionAmountRefillSummary, RefillTransactionAmountsError,
+    RefillTransactionAmountsOptions, RefillTransactionAmountsSummary,
 };
 pub(crate) use transactions::*;
 

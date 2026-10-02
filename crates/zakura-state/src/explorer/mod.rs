@@ -10,8 +10,10 @@ mod storage;
 mod types;
 
 pub use storage::{
-    refill_transaction_amounts, RefillTransactionAmountsError, RefillTransactionAmountsOptions,
-    RefillTransactionAmountsSummary,
+    apply_prepared_transaction_amount_refill, prepare_transaction_amount_refill,
+    refill_transaction_amounts, AppliedPreparedTransactionAmountRefillSummary,
+    PreparedTransactionAmountRefillSummary, RefillTransactionAmountsError,
+    RefillTransactionAmountsOptions, RefillTransactionAmountsSummary,
 };
 pub(crate) use storage::{
     ExplorerBlockCommitContext, PendingExplorerAddressRecords, EXPLORER_ADDRESS_META,

@@ -173,9 +173,11 @@ RUN --mount=type=bind,source=crates/tower-batch-control,target=crates/tower-batc
     --mount=type=cache,target=${CARGO_HOME} \
     [ -n "${SHORT_SHA}" ] && export SHORT_SHA="${SHORT_SHA}" || true; \
     cargo build --locked --release --features "${FEATURES}" --package zakura --bin zakurad --bin zakura-rollback-state --bin zakura-prune-state && \
+    cargo build --locked --release --features "${FEATURES},indexer" --package zakura --bin zakura-refill-transaction-amounts && \
     cp ${CARGO_TARGET_DIR}/release/zakurad /usr/local/bin && \
     cp ${CARGO_TARGET_DIR}/release/zakura-rollback-state /usr/local/bin && \
-    cp ${CARGO_TARGET_DIR}/release/zakura-prune-state /usr/local/bin
+    cp ${CARGO_TARGET_DIR}/release/zakura-prune-state /usr/local/bin && \
+    cp ${CARGO_TARGET_DIR}/release/zakura-refill-transaction-amounts /usr/local/bin
 
 # This stage starts from scratch using Debian and copies the built Zebra binaries
 # from the `release` stage along with other binaries and files.
@@ -231,6 +233,7 @@ RUN chown -R ${UID}:${GID} ${HOME}
 COPY --link --from=release /usr/local/bin/zakurad /usr/local/bin/
 COPY --link --from=release /usr/local/bin/zakura-rollback-state /usr/local/bin/
 COPY --link --from=release /usr/local/bin/zakura-prune-state /usr/local/bin/
+COPY --link --from=release /usr/local/bin/zakura-refill-transaction-amounts /usr/local/bin/
 COPY --link --chown=${UID}:${GID} ./docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT [ "entrypoint.sh" ]
