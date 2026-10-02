@@ -97,6 +97,9 @@ pub fn classify_unmined_transaction(
         pool: shielded_pool(&record),
         flow: shielded_flow(&record)?,
         flow_amount_zat: public_flow_amount(&record)?,
+        transparent_input_total_zat: total_input,
+        transparent_output_total_zat: total_output,
+        transparent_value_balance_zat,
         shielded_value_balance_zat: shielded_value_balance(&record)?,
     })
 }

@@ -68,6 +68,12 @@ pub struct TransactionClassification {
     pub flow: Option<ShieldedFlow>,
     /// Observable transparent/shielded boundary-flow amount in zatoshis.
     pub flow_amount_zat: Option<u64>,
+    /// Sum of transparent input values in zatoshis.
+    pub transparent_input_total_zat: i64,
+    /// Sum of transparent output values in zatoshis.
+    pub transparent_output_total_zat: i64,
+    /// Transparent value balance in zatoshis.
+    pub transparent_value_balance_zat: i64,
     /// Combined shielded value balance in zatoshis.
     pub shielded_value_balance_zat: i64,
 }

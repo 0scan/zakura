@@ -10,9 +10,10 @@ use zakura_chain::{
     transparent::{Input, OutPoint},
 };
 use zakura_indexer::{
-    classify_unmined_transaction, Error, PageDirection, ShieldedFlowFilter, ShieldedPoolFilter,
-    TransactionClassification, TransactionData, TransactionKind, TransactionKindFilter,
-    TransactionStatus, TransactionsPagination,
+    classify_unmined_transaction, BlockTransactionInput, BlockTransactionOutput, Error,
+    PageDirection, ShieldedFlowFilter, ShieldedPoolFilter, TransactionClassification,
+    TransactionData, TransactionKind, TransactionKindFilter, TransactionStatus,
+    TransactionsPagination,
 };
 use zakura_node_services::mempool::TransactionDependencies;
 
@@ -46,6 +47,7 @@ pub(super) fn transactions_page(
     transactions: Vec<VerifiedUnminedTx>,
     dependencies: &TransactionDependencies,
     request: &GetMempoolTransactionsRequest,
+    network: &Network,
 ) -> Result<MempoolTransactionsResponse, Error> {
     let query = request.transaction_query().map_err(Error::InvalidQuery)?;
     let filter_tags = filter_tags(request)?;
@@ -65,6 +67,7 @@ pub(super) fn transactions_page(
         ));
     }
 
+    let spent_outpoints = mempool_spent_outpoints(&transactions);
     let mut summary = MempoolTransactionSummary::default();
     let mut matches = Vec::new();
     for transaction in &transactions {
@@ -81,6 +84,8 @@ pub(super) fn transactions_page(
                 dependencies,
                 fee_zat,
                 classification,
+                network,
+                &spent_outpoints,
             )?);
         }
     }
@@ -164,11 +169,7 @@ pub(super) fn transaction_details(
         fee_zat,
         transaction.spent_outputs.as_slice(),
     )?;
-    let spent_outpoints = transactions
-        .iter()
-        .flat_map(|transaction| transaction.transaction.transaction().inputs())
-        .filter_map(Input::outpoint)
-        .collect::<HashSet<_>>();
+    let spent_outpoints = mempool_spent_outpoints(transactions);
 
     Ok(PendingTransactionDetails {
         transaction: transaction_data(transaction, network, &spent_outpoints)?,
@@ -195,6 +196,8 @@ fn positioned_list_item(
     dependencies: &TransactionDependencies,
     fee_zat: u64,
     classification: TransactionClassification,
+    network: &Network,
+    spent_outpoints: &HashSet<OutPoint>,
 ) -> Result<PositionedTransaction, Error> {
     let raw_transaction = transaction.transaction.transaction().as_ref();
 
@@ -223,6 +226,11 @@ fn positioned_list_item(
             fee: fee_zat.to_string(),
             vin_count: count_u32(raw_transaction.inputs().len(), "transparent input count")?,
             vout_count: count_u32(raw_transaction.outputs().len(), "transparent output count")?,
+            total_input: classification.transparent_input_total_zat.to_string(),
+            total_output: classification.transparent_output_total_zat.to_string(),
+            value_balance_transparent: classification.transparent_value_balance_zat.to_string(),
+            inputs: transparent_inputs(transaction, network)?,
+            outputs: transparent_outputs(transaction, network, spent_outpoints)?,
             shielded_value_balance: classification.shielded_value_balance_zat.to_string(),
             value_balance_sapling: raw_transaction
                 .sapling_value_balance()
@@ -299,62 +307,9 @@ fn transaction_data(
     spent_outpoints: &HashSet<OutPoint>,
 ) -> Result<TransactionData, Error> {
     let transaction = verified.transaction.transaction().as_ref();
+    let inputs = transparent_inputs(verified, network)?;
+    let outputs = transparent_outputs(verified, network, spent_outpoints)?;
     let txid = transaction.hash();
-    let expected_inputs = transaction
-        .inputs()
-        .iter()
-        .filter_map(Input::outpoint)
-        .count();
-    if expected_inputs != verified.spent_outputs.len() {
-        return Err(Error::Calculation(format!(
-            "mempool transaction has {expected_inputs} transparent inputs but {} resolved outputs",
-            verified.spent_outputs.len()
-        )));
-    }
-
-    let inputs = transaction
-        .inputs()
-        .iter()
-        .filter_map(|input| match input {
-            Input::Coinbase { .. } => None,
-            Input::PrevOut {
-                outpoint,
-                unlock_script,
-                sequence,
-            } => Some((outpoint, unlock_script, sequence)),
-        })
-        .zip(verified.spent_outputs.iter())
-        .map(|((outpoint, unlock_script, sequence), output)| {
-            zakura_indexer::BlockTransactionInput {
-                previous_transaction_id: outpoint.hash.to_string(),
-                previous_output_index: outpoint.index,
-                address: output.address(network).map(|address| address.to_string()),
-                value: output.value().zatoshis().to_string(),
-                script_sig: hex::encode(unlock_script.as_raw_bytes()),
-                sequence: *sequence,
-            }
-        })
-        .collect();
-    let outputs = transaction
-        .outputs()
-        .iter()
-        .enumerate()
-        .map(|(output_index, output)| {
-            let output_index = count_u32(output_index, "transaction output index")?;
-            let outpoint = OutPoint {
-                hash: txid,
-                index: output_index,
-            };
-            Ok(zakura_indexer::BlockTransactionOutput {
-                transaction_id: txid.to_string(),
-                address: output.address(network).map(|address| address.to_string()),
-                value: output.value().zatoshis().to_string(),
-                output_index,
-                script_pub_key: hex::encode(output.lock_script.as_raw_bytes()),
-                spent: spent_outpoints.contains(&outpoint),
-            })
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
     let total_input = verified
         .spent_outputs
         .iter()
@@ -444,6 +399,86 @@ fn transaction_data(
         inputs,
         outputs,
     })
+}
+
+fn mempool_spent_outpoints(transactions: &[VerifiedUnminedTx]) -> HashSet<OutPoint> {
+    transactions
+        .iter()
+        .flat_map(|transaction| transaction.transaction.transaction().inputs())
+        .filter_map(Input::outpoint)
+        .collect()
+}
+
+fn transparent_inputs(
+    verified: &VerifiedUnminedTx,
+    network: &Network,
+) -> Result<Vec<BlockTransactionInput>, Error> {
+    let transaction = verified.transaction.transaction().as_ref();
+    let expected_inputs = transaction
+        .inputs()
+        .iter()
+        .filter_map(Input::outpoint)
+        .count();
+    if expected_inputs != verified.spent_outputs.len() {
+        return Err(Error::Calculation(format!(
+            "mempool transaction has {expected_inputs} transparent inputs but {} resolved outputs",
+            verified.spent_outputs.len()
+        )));
+    }
+
+    Ok(transaction
+        .inputs()
+        .iter()
+        .filter_map(|input| match input {
+            Input::Coinbase { .. } => None,
+            Input::PrevOut {
+                outpoint,
+                unlock_script,
+                sequence,
+            } => Some((outpoint, unlock_script, sequence)),
+        })
+        .zip(verified.spent_outputs.iter())
+        .map(
+            |((outpoint, unlock_script, sequence), output)| BlockTransactionInput {
+                previous_transaction_id: outpoint.hash.to_string(),
+                previous_output_index: outpoint.index,
+                address: output.address(network).map(|address| address.to_string()),
+                value: output.value().zatoshis().to_string(),
+                script_sig: hex::encode(unlock_script.as_raw_bytes()),
+                sequence: *sequence,
+            },
+        )
+        .collect())
+}
+
+fn transparent_outputs(
+    verified: &VerifiedUnminedTx,
+    network: &Network,
+    spent_outpoints: &HashSet<OutPoint>,
+) -> Result<Vec<BlockTransactionOutput>, Error> {
+    let transaction = verified.transaction.transaction().as_ref();
+    let txid = transaction.hash();
+
+    transaction
+        .outputs()
+        .iter()
+        .enumerate()
+        .map(|(output_index, output)| {
+            let output_index = count_u32(output_index, "transaction output index")?;
+            let outpoint = OutPoint {
+                hash: txid,
+                index: output_index,
+            };
+            Ok(BlockTransactionOutput {
+                transaction_id: txid.to_string(),
+                address: output.address(network).map(|address| address.to_string()),
+                value: output.value().zatoshis().to_string(),
+                output_index,
+                script_pub_key: hex::encode(output.lock_script.as_raw_bytes()),
+                spent: spent_outpoints.contains(&outpoint),
+            })
+        })
+        .collect()
 }
 
 fn mempool_metadata(
@@ -581,6 +616,7 @@ mod tests {
             Vec::new(),
             &TransactionDependencies::default(),
             &GetMempoolTransactionsRequest::default(),
+            &Network::Mainnet,
         )
         .unwrap();
 
@@ -600,7 +636,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = transactions_page(Vec::new(), &TransactionDependencies::default(), &request);
+        let result = transactions_page(
+            Vec::new(),
+            &TransactionDependencies::default(),
+            &request,
+            &Network::Mainnet,
+        );
 
         assert!(matches!(result, Err(Error::InvalidCursor(_))));
     }
