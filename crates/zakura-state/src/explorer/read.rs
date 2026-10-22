@@ -2,8 +2,10 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
+
+use rayon::prelude::*;
 
 use zakura_chain::{
     transaction::{self, Transaction},
@@ -18,7 +20,7 @@ use crate::{
     },
     request::Spend,
     service::{
-        finalized_state::{ReadDisk, ZakuraDb},
+        finalized_state::{OutputLocation, ReadDisk, ZakuraDb},
         non_finalized_state::Chain,
         read::{block_and_size, spending_transaction_hash, transparent_balance},
     },
@@ -157,56 +159,109 @@ pub fn explorer_block_summaries(
         .collect()
 }
 
+/// Threads for explorer point reads, which mostly wait on disk.
+///
+/// Explorer pages read many cold, unrelated keys (historical parent transactions in particular),
+/// so issuing them concurrently hides most of the disk latency. They run on their own pool so
+/// they never occupy the global rayon threads that block verification uses.
+static EXPLORER_READ_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .thread_name(|index| format!("explorer-read-{index}"))
+        .build()
+        .expect("the explorer read pool can be built")
+});
+
 /// Resolves transparent outputs, including outputs that later transactions already spent.
 ///
 /// Spent finalized outputs have left the UTXO set, so they are read from their parent
-/// transactions. Each parent is decoded once and dropped before the next one, so memory stays
-/// proportional to the number of outpoints instead of the combined size of every parent.
-/// Historical inputs often spend large mining-pool payouts, where holding all parents at once
-/// costs gigabytes.
+/// transactions. Each parent's location is looked up once, and each parent is decoded at most
+/// once and dropped as soon as its outputs are extracted, so memory stays proportional to the
+/// number of outpoints instead of the combined size of every parent. Historical inputs often
+/// spend large mining-pool payouts, where holding all parents at once costs gigabytes.
 pub fn explorer_transparent_outputs(
     chain: Option<Arc<Chain>>,
     db: &ZakuraDb,
     outpoints: &[transparent::OutPoint],
 ) -> Vec<Option<transparent::Utxo>> {
     let mut outputs = vec![None; outpoints.len()];
-    let mut spent_by_parent = HashMap::<transaction::Hash, Vec<usize>>::new();
+    let mut finalized_by_parent = HashMap::<transaction::Hash, Vec<usize>>::new();
 
     for (position, outpoint) in outpoints.iter().enumerate() {
-        let unspent_or_non_finalized = chain
+        match chain
             .as_ref()
             .and_then(|chain| chain.created_utxo(outpoint))
-            .or_else(|| db.utxo(outpoint).map(|ordered| ordered.utxo));
-        match unspent_or_non_finalized {
+        {
             Some(utxo) => outputs[position] = Some(utxo),
-            None => spent_by_parent
+            None => finalized_by_parent
                 .entry(outpoint.hash)
                 .or_default()
                 .push(position),
         }
     }
 
-    let mut parents = spent_by_parent
-        .into_iter()
-        .filter_map(|(hash, positions)| Some((db.transaction_location(hash)?, positions)))
-        .collect::<Vec<_>>();
-    // Visit parents in key order so the reads walk `tx_by_loc` forwards.
-    parents.sort_unstable_by_key(|(location, _)| *location);
+    let mut parents = finalized_by_parent.into_iter().collect::<Vec<_>>();
+    // Visit parents in hash order, which keeps the location lookups walking `tx_loc_by_hash`
+    // forwards within each worker's share of the parents.
+    parents.sort_unstable_by_key(|(hash, _)| *hash);
 
-    for (location, positions) in parents {
-        let Some(parent) = finalized_transaction_at(db, location) else {
-            continue;
-        };
-        for position in positions {
-            let index =
-                usize::try_from(outpoints[position].index).expect("u32 output index fits in usize");
-            outputs[position] = parent.outputs().get(index).cloned().map(|output| {
-                transparent::Utxo::from_location(output, location.height, location.index.as_usize())
-            });
-        }
+    let resolved = EXPLORER_READ_POOL.install(|| {
+        parents
+            .par_iter()
+            .map(|(hash, positions)| finalized_parent_outputs(db, outpoints, *hash, positions))
+            .collect::<Vec<_>>()
+    });
+    for (position, utxo) in resolved.into_iter().flatten() {
+        outputs[position] = utxo;
     }
 
     outputs
+}
+
+/// Resolves the `positions` of `outpoints` that spend outputs of the finalized transaction
+/// `parent_hash`, returning each position with its output.
+///
+/// Outputs are probed in the UTXO set, which serves unspent outputs such as mempool inputs.
+/// After the first spent output, the parent is decoded once and supplies the rest without more
+/// probes, so a fully spent parent costs one probe instead of one per output.
+fn finalized_parent_outputs(
+    db: &ZakuraDb,
+    outpoints: &[transparent::OutPoint],
+    parent_hash: transaction::Hash,
+    positions: &[usize],
+) -> Vec<(usize, Option<transparent::Utxo>)> {
+    let Some(location) = db.transaction_location(parent_hash) else {
+        return Vec::new();
+    };
+
+    let mut parent: Option<Option<Arc<Transaction>>> = None;
+    positions
+        .iter()
+        .map(|&position| {
+            let outpoint = &outpoints[position];
+            let unspent = if parent.is_none() {
+                db.utxo_by_location(OutputLocation::from_outpoint(location, outpoint))
+                    .map(|ordered| ordered.utxo)
+            } else {
+                None
+            };
+            let utxo = unspent.or_else(|| {
+                let parent = parent
+                    .get_or_insert_with(|| finalized_transaction_at(db, location))
+                    .as_ref()?;
+                let index =
+                    usize::try_from(outpoint.index).expect("u32 output index fits in usize");
+                parent.outputs().get(index).cloned().map(|output| {
+                    transparent::Utxo::from_location(
+                        output,
+                        location.height,
+                        location.index.as_usize(),
+                    )
+                })
+            });
+            (position, utxo)
+        })
+        .collect()
 }
 
 /// Reads a finalized transaction by location, skipping the hash-index and header reads that
@@ -320,15 +375,17 @@ pub fn explorer_transactions_by_location(
     db: &ZakuraDb,
     locations: &[TransactionLocation],
 ) -> Vec<Option<Arc<Transaction>>> {
-    locations
-        .iter()
-        .map(|location| {
-            chain
-                .as_ref()
-                .and_then(|chain| chain.transaction_by_loc(*location).cloned())
-                .or_else(|| finalized_transaction_at(db, *location))
-        })
-        .collect()
+    EXPLORER_READ_POOL.install(|| {
+        locations
+            .par_iter()
+            .map(|location| {
+                chain
+                    .as_ref()
+                    .and_then(|chain| chain.transaction_by_loc(*location).cloned())
+                    .or_else(|| finalized_transaction_at(db, *location))
+            })
+            .collect()
+    })
 }
 
 /// Returns canonical transparent-address state and one transaction page.
@@ -414,13 +471,15 @@ pub fn explorer_address_page(
     }
     let has_more = locations.len() > requested;
     locations.truncate(requested);
-    let transactions = locations
-        .into_iter()
-        .map(|location| {
-            explorer_transaction_summary_at_location(chain.as_ref(), db, location)
-                .expect("an address transaction index has its canonical transaction")
-        })
-        .collect();
+    let transactions = EXPLORER_READ_POOL.install(|| {
+        locations
+            .into_par_iter()
+            .map(|location| {
+                explorer_transaction_summary_at_location(chain.as_ref(), db, location)
+                    .expect("an address transaction index has its canonical transaction")
+            })
+            .collect()
+    });
 
     if !include_summary {
         return Ok(ExplorerAddressPage {
