@@ -49,6 +49,7 @@ where
         None,
         ExplorerPageDirection::Older,
         TransactionHeightRange::new(Height::MIN.0..=Height::MAX.0)?,
+        true,
     )
     .await?;
     let indexed_tip = page.best_tip;
@@ -178,6 +179,7 @@ where
         }),
         state_direction,
         height_range,
+        false,
     )
     .await?;
     if !page.cursor_valid {
@@ -251,6 +253,7 @@ async fn load_address_page<State>(
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
     height_range: TransactionHeightRange,
+    include_summary: bool,
 ) -> Result<zakura_state::ExplorerAddressPage, Error>
 where
     State: ReadState,
@@ -262,6 +265,7 @@ where
             cursor,
             direction,
             height_range: height_range.from..=height_range.to,
+            include_summary,
         }))
         .await
         .map_err(|error| Error::StateRequest(error.to_string()))?;

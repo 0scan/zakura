@@ -5,7 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use zakura_chain::{transaction::Transaction, transparent};
+use zakura_chain::{
+    transaction::{self, Transaction},
+    transparent,
+};
 
 use crate::{
     explorer::{
@@ -15,7 +18,7 @@ use crate::{
     },
     request::Spend,
     service::{
-        finalized_state::ZakuraDb,
+        finalized_state::{ReadDisk, ZakuraDb},
         non_finalized_state::Chain,
         read::{block_and_size, spending_transaction_hash, transparent_balance},
     },
@@ -79,6 +82,7 @@ pub fn handle(
             cursor,
             direction,
             height_range,
+            include_summary,
         } => ExplorerReadResponse::AddressPage(Box::new(explorer_address_page(
             chain,
             db,
@@ -87,6 +91,7 @@ pub fn handle(
             cursor,
             direction,
             height_range,
+            include_summary,
         )?)),
         ExplorerReadRequest::TransactionsByLocation(locations) => {
             ExplorerReadResponse::TransactionsByLocation(explorer_transactions_by_location(
@@ -152,49 +157,70 @@ pub fn explorer_block_summaries(
         .collect()
 }
 
-/// Resolves historical transparent outputs in one state snapshot.
+/// Resolves transparent outputs, including outputs that later transactions already spent.
 ///
-/// Parent transactions are cached by hash, so many inputs from the same
-/// transaction require one finalized-state transaction read.
+/// Spent finalized outputs have left the UTXO set, so they are read from their parent
+/// transactions. Each parent is decoded once and dropped before the next one, so memory stays
+/// proportional to the number of outpoints instead of the combined size of every parent.
+/// Historical inputs often spend large mining-pool payouts, where holding all parents at once
+/// costs gigabytes.
 pub fn explorer_transparent_outputs(
     chain: Option<Arc<Chain>>,
     db: &ZakuraDb,
     outpoints: &[transparent::OutPoint],
 ) -> Vec<Option<transparent::Utxo>> {
-    let mut parent_transactions =
-        HashMap::<_, Option<(Arc<Transaction>, TransactionLocation)>>::new();
+    let mut outputs = vec![None; outpoints.len()];
+    let mut spent_by_parent = HashMap::<transaction::Hash, Vec<usize>>::new();
 
-    outpoints
-        .iter()
-        .map(|outpoint| {
-            if let Some(utxo) = chain
-                .as_ref()
-                .and_then(|chain| chain.created_utxo(outpoint))
-                .or_else(|| db.utxo(outpoint).map(|ordered| ordered.utxo))
-            {
-                return Some(utxo);
-            }
+    for (position, outpoint) in outpoints.iter().enumerate() {
+        let unspent_or_non_finalized = chain
+            .as_ref()
+            .and_then(|chain| chain.created_utxo(outpoint))
+            .or_else(|| db.utxo(outpoint).map(|ordered| ordered.utxo));
+        match unspent_or_non_finalized {
+            Some(utxo) => outputs[position] = Some(utxo),
+            None => spent_by_parent
+                .entry(outpoint.hash)
+                .or_default()
+                .push(position),
+        }
+    }
 
-            let parent = parent_transactions.entry(outpoint.hash).or_insert_with(|| {
-                let location = db.transaction_location(outpoint.hash)?;
-                let (transaction, _, _) = db.transaction(outpoint.hash)?;
-                Some((transaction, location))
+    let mut parents = spent_by_parent
+        .into_iter()
+        .filter_map(|(hash, positions)| Some((db.transaction_location(hash)?, positions)))
+        .collect::<Vec<_>>();
+    // Visit parents in key order so the reads walk `tx_by_loc` forwards.
+    parents.sort_unstable_by_key(|(location, _)| *location);
+
+    for (location, positions) in parents {
+        let Some(parent) = finalized_transaction_at(db, location) else {
+            continue;
+        };
+        for position in positions {
+            let index =
+                usize::try_from(outpoints[position].index).expect("u32 output index fits in usize");
+            outputs[position] = parent.outputs().get(index).cloned().map(|output| {
+                transparent::Utxo::from_location(output, location.height, location.index.as_usize())
             });
-            parent.as_ref().and_then(|(transaction, location)| {
-                transaction
-                    .outputs()
-                    .get(usize::try_from(outpoint.index).expect("u32 output index fits in usize"))
-                    .cloned()
-                    .map(|output| {
-                        transparent::Utxo::from_location(
-                            output,
-                            location.height,
-                            location.index.as_usize(),
-                        )
-                    })
-            })
-        })
-        .collect()
+        }
+    }
+
+    outputs
+}
+
+/// Reads a finalized transaction by location, skipping the hash-index and header reads that
+/// [`ZakuraDb::transaction`] performs.
+#[allow(clippy::unwrap_in_result)]
+fn finalized_transaction_at(
+    db: &ZakuraDb,
+    location: TransactionLocation,
+) -> Option<Arc<Transaction>> {
+    let tx_by_loc = db
+        .disk_db()
+        .cf_handle("tx_by_loc")
+        .expect("tx_by_loc column family is registered");
+    db.disk_db().zs_get(&tx_by_loc, &location)
 }
 
 /// Returns one canonical transaction page, including the non-finalized best-chain suffix.
@@ -300,15 +326,15 @@ pub fn explorer_transactions_by_location(
             chain
                 .as_ref()
                 .and_then(|chain| chain.transaction_by_loc(*location).cloned())
-                .or_else(|| {
-                    let txid = db.transaction_hash(*location)?;
-                    db.transaction(txid).map(|(transaction, _, _)| transaction)
-                })
+                .or_else(|| finalized_transaction_at(db, *location))
         })
         .collect()
 }
 
 /// Returns canonical transparent-address state and one transaction page.
+///
+/// The balance and activity summary are only read when `include_summary` is set.
+#[allow(clippy::too_many_arguments)]
 pub fn explorer_address_page(
     chain: Option<Arc<Chain>>,
     db: &ZakuraDb,
@@ -317,6 +343,7 @@ pub fn explorer_address_page(
     cursor: Option<TransactionLocation>,
     direction: ExplorerPageDirection,
     height_range: std::ops::RangeInclusive<zakura_chain::block::Height>,
+    include_summary: bool,
 ) -> Result<ExplorerAddressPage, crate::BoxError> {
     let from_height = *height_range.start();
     let to_height = *height_range.end();
@@ -329,7 +356,15 @@ pub fn explorer_address_page(
         .map(|chain| chain.non_finalized_tip())
         .or(finalized_tip);
     let addresses = HashSet::from([address]);
-    let (balance, received_zat) = transparent_balance(chain.clone(), db, addresses.clone())?;
+    let (balance_zat, received_zat) = if include_summary {
+        let (balance, received_zat) = transparent_balance(chain.clone(), db, addresses.clone())?;
+        let balance_zat = u64::try_from(balance.zatoshis()).map_err(|_| {
+            crate::BoxError::from("transparent address balance must be nonnegative")
+        })?;
+        (balance_zat, received_zat)
+    } else {
+        (0, 0)
+    };
 
     let mut locations = db.explorer_address_transaction_locations(
         address,
@@ -387,6 +422,21 @@ pub fn explorer_address_page(
         })
         .collect();
 
+    if !include_summary {
+        return Ok(ExplorerAddressPage {
+            best_tip,
+            cursor_valid,
+            balance_zat,
+            received_zat,
+            activity: None,
+            first_seen: None,
+            last_seen: None,
+            first_funding: None,
+            transactions,
+            has_more,
+        });
+    }
+
     let mut activity = db.explorer_address_record(address);
     all_non_finalized_locations.sort_unstable();
     for location in all_non_finalized_locations {
@@ -434,9 +484,7 @@ pub fn explorer_address_page(
     Ok(ExplorerAddressPage {
         best_tip,
         cursor_valid,
-        balance_zat: u64::try_from(balance.zatoshis()).map_err(|_| {
-            crate::BoxError::from("transparent address balance must be nonnegative")
-        })?,
+        balance_zat,
         received_zat,
         activity,
         first_seen,
@@ -877,9 +925,129 @@ fn non_finalized_summaries(
 
 #[cfg(test)]
 mod tests {
-    use zakura_chain::{parameters::NetworkKind, transparent::Address};
+    use std::sync::Arc;
 
-    use super::{issued_supply_change, top_balance_totals};
+    use zakura_chain::{
+        amount::{Amount, NonNegative},
+        block::Height,
+        parameters::{Network, NetworkKind},
+        transaction::{self, LockTime, Transaction},
+        transparent::{Address, Input, OutPoint, Output, Script, Utxo},
+    };
+
+    use crate::{
+        constants::{state_database_format_version_in_code, STATE_DATABASE_KIND},
+        service::finalized_state::{
+            DiskWriteBatch, OutputLocation, WriteDisk, ZakuraDb, STATE_COLUMN_FAMILIES_IN_CODE,
+        },
+        Config, TransactionLocation,
+    };
+
+    use super::{explorer_transparent_outputs, issued_supply_change, top_balance_totals};
+
+    #[test]
+    fn transparent_outputs_resolve_spent_and_unspent_outputs_in_request_order() {
+        let db = ZakuraDb::new(
+            &Config::ephemeral(),
+            STATE_DATABASE_KIND,
+            &state_database_format_version_in_code(),
+            &Network::Mainnet,
+            true,
+            STATE_COLUMN_FAMILIES_IN_CODE
+                .iter()
+                .map(ToString::to_string),
+            false,
+        )
+        .expect("opening an ephemeral database should succeed");
+
+        let address = Address::from_pub_key_hash(NetworkKind::Mainnet, [7; 20]);
+        let parent = |seed: u8| {
+            Arc::new(Transaction::V1 {
+                inputs: vec![Input::PrevOut {
+                    outpoint: OutPoint {
+                        hash: transaction::Hash([seed; 32]),
+                        index: 0,
+                    },
+                    unlock_script: Script::new(&[]),
+                    sequence: u32::MAX,
+                }],
+                outputs: (1..=3)
+                    .map(|value| {
+                        let value = Amount::<NonNegative>::try_from(u64::from(seed) * 100 + value)
+                            .expect("small values are valid amounts");
+                        Output::new(value, address.script())
+                    })
+                    .collect(),
+                lock_time: LockTime::unlocked(),
+            })
+        };
+        let older = parent(1);
+        let newer = parent(2);
+        let older_location = TransactionLocation::from_usize(Height(10), 3);
+        let newer_location = TransactionLocation::from_usize(Height(20), 0);
+
+        let disk = db.disk_db();
+        let tx_by_loc = disk.cf_handle("tx_by_loc").unwrap();
+        let tx_loc_by_hash = disk.cf_handle("tx_loc_by_hash").unwrap();
+        let utxo_by_out_loc = disk.cf_handle("utxo_by_out_loc").unwrap();
+        let mut batch = DiskWriteBatch::new();
+        for (transaction, location) in [(&older, older_location), (&newer, newer_location)] {
+            batch.zs_insert(&tx_by_loc, location, transaction.as_ref());
+            batch.zs_insert(&tx_loc_by_hash, transaction.hash(), location);
+        }
+        // One output is still unspent, so it resolves through the UTXO set.
+        let unspent = OutPoint {
+            hash: older.hash(),
+            index: 1,
+        };
+        batch.zs_insert(
+            &utxo_by_out_loc,
+            OutputLocation::from_outpoint(older_location, &unspent),
+            &older.outputs()[1],
+        );
+        db.write_batch(batch)
+            .expect("ephemeral db accepts the batch");
+
+        let outpoint = |transaction: &Arc<Transaction>, index| OutPoint {
+            hash: transaction.hash(),
+            index,
+        };
+        let expected =
+            |transaction: &Arc<Transaction>, location: TransactionLocation, index: usize| {
+                Some(Utxo::from_location(
+                    transaction.outputs()[index].clone(),
+                    location.height,
+                    location.index.as_usize(),
+                ))
+            };
+        let missing_parent = OutPoint {
+            hash: transaction::Hash([9; 32]),
+            index: 0,
+        };
+
+        assert_eq!(
+            explorer_transparent_outputs(
+                None,
+                &db,
+                &[
+                    outpoint(&newer, 2),
+                    outpoint(&older, 0),
+                    missing_parent,
+                    unspent,
+                    outpoint(&newer, 9),
+                    outpoint(&older, 2),
+                ],
+            ),
+            vec![
+                expected(&newer, newer_location, 2),
+                expected(&older, older_location, 0),
+                None,
+                expected(&older, older_location, 1),
+                None,
+                expected(&older, older_location, 2),
+            ],
+        );
+    }
 
     #[test]
     fn issued_supply_change_requires_a_complete_window_boundary() {

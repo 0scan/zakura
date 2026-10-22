@@ -70,7 +70,7 @@ pub(super) fn derive_address_effects(
             sent_zat,
         })
         .collect::<Vec<_>>();
-    effects.sort_by_key(|effect| effect.address.to_string());
+    effects.sort_by_cached_key(|effect| effect.address.to_string());
 
     Ok(TransactionAddressEffects { effects })
 }

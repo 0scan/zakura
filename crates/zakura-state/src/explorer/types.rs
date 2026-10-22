@@ -132,6 +132,10 @@ pub enum ExplorerReadRequest {
         direction: ExplorerPageDirection,
         /// Inclusive block-height bounds for returned transactions.
         height_range: RangeInclusive<block::Height>,
+        /// Also read the balance and activity summary. When false, the balance and received
+        /// totals are zero and the activity fields are `None`, which skips the balance's
+        /// non-finalized chain walk for callers that only need the page.
+        include_summary: bool,
     },
     /// Loads canonical transactions by their chain locations, preserving request order.
     TransactionsByLocation(Arc<[TransactionLocation]>),
