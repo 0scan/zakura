@@ -30,6 +30,9 @@ use zakura_state::{ReadState as ReadStateService, State as StateService};
 use crate::server::{self, error::MapError};
 
 #[cfg(feature = "indexer")]
+use super::admission::{run_heavy_read, ADDRESS_HISTORY_READS, DETAIL_READS};
+
+#[cfg(feature = "indexer")]
 use super::types::{
     BlockchainRuntimeStats, MempoolStats, MiningStats, NetworkStats, NodeSyncStats,
     SupplyPoolStats, SupplyStats,
@@ -106,13 +109,17 @@ where
                 HashOrHeight::new(&hash_or_height, self.latest_chain_tip.best_tip_height())
                     .map_error(server::error::LegacyCode::InvalidParameter)?;
 
-            match block_details_from_state(self.read_state.clone(), &self.network, identifier).await
-            {
-                Ok(Some(details)) => Ok(details),
-                Ok(None) => Err("Block not found in the best chain")
-                    .map_error(server::error::LegacyCode::InvalidAddressOrKey),
-                Err(error) => Err(error).map_misc_error(),
-            }
+            let read_state = self.read_state.clone();
+            let network = self.network.clone();
+            run_heavy_read(&DETAIL_READS, async move {
+                match block_details_from_state(read_state, &network, identifier).await {
+                    Ok(Some(details)) => Ok(details),
+                    Ok(None) => Err("Block not found in the best chain")
+                        .map_error(server::error::LegacyCode::InvalidAddressOrKey),
+                    Err(error) => Err(error).map_misc_error(),
+                }
+            })
+            .await
         }
     }
 
@@ -230,14 +237,21 @@ where
         return explorer_index_disabled();
 
         #[cfg(feature = "indexer")]
-        match transaction_details_from_state(self.read_state.clone(), &self.network, txid).await {
-            Ok(Some(details)) => Ok(TransactionDetailsResponse::Mined(details)),
-            Ok(None) => Err("Transaction not found in the best chain")
-                .map_error(server::error::LegacyCode::InvalidAddressOrKey),
-            Err(error @ zakura_indexer::Error::ExplorerDataUnavailable(_)) => {
-                Err(error).map_error(server::error::LegacyCode::InWarmup)
-            }
-            Err(error) => Err(error).map_misc_error(),
+        {
+            let read_state = self.read_state.clone();
+            let network = self.network.clone();
+            run_heavy_read(&DETAIL_READS, async move {
+                match transaction_details_from_state(read_state, &network, txid).await {
+                    Ok(Some(details)) => Ok(TransactionDetailsResponse::Mined(details)),
+                    Ok(None) => Err("Transaction not found in the best chain")
+                        .map_error(server::error::LegacyCode::InvalidAddressOrKey),
+                    Err(error @ zakura_indexer::Error::ExplorerDataUnavailable(_)) => {
+                        Err(error).map_error(server::error::LegacyCode::InWarmup)
+                    }
+                    Err(error) => Err(error).map_misc_error(),
+                }
+            })
+            .await
         }
     }
 
@@ -275,25 +289,30 @@ where
             let address = explorer_transparent_address(&self.network, &request.address)
                 .map_error(server::error::LegacyCode::InvalidAddressOrKey)?;
             let height_range = request.height_range();
+            let read_state = self.read_state.clone();
+            let network = self.network.clone();
 
-            match address_transactions_page_from_state(
-                self.read_state.clone(),
-                &self.network,
-                address,
-                request.limit,
-                request.cursor,
-                request.direction,
-                height_range,
-            )
+            run_heavy_read(&ADDRESS_HISTORY_READS, async move {
+                match address_transactions_page_from_state(
+                    read_state,
+                    &network,
+                    address,
+                    request.limit,
+                    request.cursor,
+                    request.direction,
+                    height_range,
+                )
+                .await
+                {
+                    Ok(response) => Ok(response),
+                    Err(
+                        error @ (zakura_indexer::Error::InvalidCursor(_)
+                        | zakura_indexer::Error::InvalidQuery(_)),
+                    ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
+                    Err(error) => Err(error).map_misc_error(),
+                }
+            })
             .await
-            {
-                Ok(response) => Ok(response),
-                Err(
-                    error @ (zakura_indexer::Error::InvalidCursor(_)
-                    | zakura_indexer::Error::InvalidQuery(_)),
-                ) => Err(error).map_error(server::error::LegacyCode::InvalidParameter),
-                Err(error) => Err(error).map_misc_error(),
-            }
         }
     }
 

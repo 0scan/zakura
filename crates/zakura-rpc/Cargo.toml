@@ -71,7 +71,7 @@ subtle = { workspace = true }
 # Error handling
 eyre = { workspace = true }
 
-tokio = { workspace = true, features = ["time", "rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["time", "rt-multi-thread", "macros", "sync"] }
 tower = { workspace = true }
 
 # gRPC server dependencies
