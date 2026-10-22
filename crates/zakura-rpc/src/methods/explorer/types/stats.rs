@@ -1,11 +1,10 @@
 //! Explorer indexer status and P0 network overview responses.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 use zakura_indexer::{ChainTotals, RollingDayStats};
 
 /// Progress of the rebuildable explorer index relative to the node state tip.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexerStatusResponse {
     /// Current canonical state tip height.
     pub chain_height: Option<String>,
@@ -24,7 +23,7 @@ pub struct IndexerStatusResponse {
 }
 
 /// Current mining data supplied by the node.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MiningStats {
     /// Current proof-of-work difficulty.
     pub difficulty: String,
@@ -48,7 +47,7 @@ pub struct MiningStats {
 }
 
 /// Current node network information.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NetworkStats {
     /// Recently live peer count visible to this node.
     pub peer_count: String,
@@ -59,7 +58,7 @@ pub struct NetworkStats {
 }
 
 /// Local node synchronization relative to the estimated network tip.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NodeSyncStats {
     /// Estimated current network chain height.
     pub estimated_network_height: String,
@@ -74,7 +73,7 @@ pub struct NodeSyncStats {
 }
 
 /// Current mempool resource usage.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MempoolStats {
     /// Number of pending transactions.
     pub transaction_count: String,
@@ -85,7 +84,7 @@ pub struct MempoolStats {
 }
 
 /// One current consensus value-pool balance.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SupplyPoolStats {
     /// Stable pool identifier such as `transparent`, `sapling`, or `orchard`.
     pub id: String,
@@ -96,7 +95,7 @@ pub struct SupplyPoolStats {
 }
 
 /// Current chain supply and pool distribution.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SupplyStats {
     /// Total chain supply in zatoshis.
     pub chain_supply_zat: String,
@@ -105,7 +104,7 @@ pub struct SupplyStats {
 }
 
 /// Node state storage and verification information.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BlockchainRuntimeStats {
     /// On-disk state size reported by the state service.
     pub state_size_bytes: String,
@@ -114,7 +113,7 @@ pub struct BlockchainRuntimeStats {
 }
 
 /// P0 explorer overview composed from indexer aggregates and live node services.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ExplorerNetworkStatsResponse {
     /// Local node synchronization relative to the estimated network tip.
     pub sync: NodeSyncStats,

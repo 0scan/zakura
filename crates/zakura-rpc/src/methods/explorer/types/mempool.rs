@@ -1,6 +1,5 @@
 //! Explorer-facing mempool list and pending transaction detail responses.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 use zakura_indexer::{
     ShieldedFlow, ShieldedPool, TransactionData, TransactionDetails, TransactionEndpoint,
@@ -8,7 +7,7 @@ use zakura_indexer::{
 };
 
 /// A compact pending transaction summary for mempool list views.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MempoolTransactionListItem {
     /// Transaction identifier in display byte order.
     pub txid: String,
@@ -67,7 +66,7 @@ pub struct MempoolTransactionListItem {
 }
 
 /// Transaction-kind counts for the complete live mempool snapshot.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct MempoolTransactionSummary {
     /// Number of pending transactions.
     pub total: u64,
@@ -78,7 +77,7 @@ pub struct MempoolTransactionSummary {
 }
 
 /// A cursor-paginated newest-first mempool snapshot.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MempoolTransactionsResponse {
     /// Transaction-kind counts for the unfiltered mempool snapshot.
     pub summary: MempoolTransactionSummary,
@@ -89,7 +88,7 @@ pub struct MempoolTransactionsResponse {
 }
 
 /// Mempool placement metadata for one pending transaction.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct MempoolTransactionMetadata {
     /// Local Unix time when the transaction entered the mempool.
     pub first_seen: Option<String>,
@@ -100,7 +99,7 @@ pub struct MempoolTransactionMetadata {
 }
 
 /// Full explorer detail for a transaction currently in the mempool.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PendingTransactionDetails {
     /// Block-independent transaction data.
     #[serde(flatten)]
@@ -135,7 +134,7 @@ pub struct PendingTransactionDetails {
 }
 
 /// Detail response returned by the shared transaction-detail RPC.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum TransactionDetailsResponse {
     /// A transaction mined in the canonical chain.

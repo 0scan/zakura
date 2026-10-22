@@ -194,6 +194,7 @@ fn intra_block_self_spend_chain_in_finalized_state() {
         #[cfg(feature = "indexer")]
         &mut explorer_context,
         address_balances,
+        false,
     );
 
     // Write the batch and confirm the final on-disk balance matches the consensus value
@@ -204,6 +205,7 @@ fn intra_block_self_spend_chain_in_finalized_state() {
 
     let (balance, received) = zakura_db
         .address_balance(&address)
+        .expect("indexed databases answer address balance queries")
         .expect("address balance is present after writing the batch");
     assert_eq!(balance, value, "final balance equals the existing balance");
     assert_eq!(

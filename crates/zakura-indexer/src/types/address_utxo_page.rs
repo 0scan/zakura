@@ -1,10 +1,9 @@
 //! Cursor-paginated transparent-address UTXO responses.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 /// One transparent output that is unspent in the current best chain.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressUtxoSummary {
     /// Transaction that created the output.
     pub txid: String,
@@ -38,7 +37,7 @@ pub struct AddressUtxoSummary {
 }
 
 /// Pagination metadata for [`AddressUtxosResponse`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressUtxosPagination {
     /// Maximum number of requested records.
     pub limit: u32,
@@ -57,7 +56,7 @@ pub struct AddressUtxosPagination {
 }
 
 /// A newest-first page of current transparent UTXOs for one address.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressUtxosResponse {
     /// Requested transparent address.
     pub address: String,

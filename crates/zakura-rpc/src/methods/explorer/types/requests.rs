@@ -3,7 +3,6 @@
 #[cfg(any(feature = "indexer", test))]
 use std::ops::RangeInclusive;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 #[cfg(any(feature = "indexer", test))]
 use zakura_chain::block::Height;
@@ -13,7 +12,7 @@ use zakura_indexer::{
 };
 
 /// Cursor pagination parameters for `getblocks`.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct GetBlocksRequest {
     /// Maximum records to return. The indexer clamps this value to 1–100.
@@ -27,7 +26,7 @@ pub struct GetBlocksRequest {
 }
 
 /// Cursor pagination and filter parameters for `gettransactions`.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct GetTransactionsRequest {
     /// Maximum records to return. The indexer clamps this value to 1–100.
@@ -59,7 +58,7 @@ pub struct GetTransactionsRequest {
 }
 
 /// Cursor pagination and filter parameters for `getmempooltransactions`.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct GetMempoolTransactionsRequest {
     /// Maximum records to return. The indexer clamps this value to 1–100.
@@ -85,7 +84,7 @@ pub struct GetMempoolTransactionsRequest {
 }
 
 /// Cursor pagination parameters for `getaddresstransactions`.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetAddressTransactionsRequest {
     /// Transparent address whose canonical transaction history is requested.
@@ -113,7 +112,7 @@ pub struct GetAddressTransactionsRequest {
 }
 
 /// Cursor pagination parameters for `getaddressutxospage`.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetAddressUtxosPageRequest {
     /// Transparent address whose current unspent outputs are requested.

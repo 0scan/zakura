@@ -62,9 +62,9 @@ pub fn handle(
                     .iter()
                     .map(|outpoint| {
                         spending_transaction_hash(chain.clone(), db, Spend::OutPoint(*outpoint))
-                            .is_some()
+                            .map(|hash| hash.is_some())
                     })
-                    .collect(),
+                    .collect::<Result<_, _>>()?,
             )
         }
         ExplorerReadRequest::TransactionSummary(txid) => {
@@ -637,6 +637,8 @@ fn apply_live_transparent_balance_changes(
     for (address, change) in changes {
         let old_balance = balances.get(&address).copied().unwrap_or_else(|| {
             db.address_balance(&address)
+                .ok()
+                .flatten()
                 .map(|(amount, _)| {
                     u64::try_from(amount.zatoshis())
                         .expect("finalized transparent balances are nonnegative")

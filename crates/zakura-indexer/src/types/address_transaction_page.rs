@@ -1,12 +1,11 @@
 //! Cursor-paginated address transaction responses.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::AddressTransactionListItem;
 
 /// Pagination metadata for [`AddressTransactionsResponse`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressTransactionsPagination {
     /// Maximum number of requested records.
     pub limit: u32,
@@ -25,7 +24,7 @@ pub struct AddressTransactionsPagination {
 }
 
 /// A newest-first page of canonical transactions involving one address.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressTransactionsResponse {
     /// Requested transparent address.
     pub address: String,

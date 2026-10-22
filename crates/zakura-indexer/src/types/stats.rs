@@ -1,10 +1,9 @@
 //! Explorer-facing canonical-chain statistics.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 /// All-time aggregates for the canonical portion covered by the indexer.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ChainTotals {
     /// Number of indexed canonical blocks.
     pub block_count: String,
@@ -27,7 +26,7 @@ pub struct ChainTotals {
 }
 
 /// Activity in the trailing 24 hours ending at the indexed tip timestamp.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RollingDayStats {
     /// False when the safety scan limit was reached before covering 24 hours.
     pub complete: bool,
@@ -67,7 +66,7 @@ pub struct RollingDayStats {
 }
 
 /// Explorer statistics at one canonical finalized tip.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct IndexerStats {
     /// Highest indexed canonical block height.
     pub indexed_height: Option<String>,

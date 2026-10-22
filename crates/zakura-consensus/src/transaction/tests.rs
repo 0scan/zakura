@@ -10,14 +10,14 @@ use std::{
     sync::Arc,
 };
 
+use crate::primitives::batch_control::{Batch, BatchControl};
+use crate::primitives::fallback::Fallback;
 use chrono::{DateTime, TimeZone, Utc};
-use color_eyre::eyre::Report;
+use eyre::Report;
 use futures::{FutureExt, TryFutureExt};
 use halo2::pasta::{group::ff::PrimeField, pallas};
 use tokio::time::timeout;
 use tower::{buffer::Buffer, service_fn, Service, ServiceExt};
-use tower_batch_control::{Batch, BatchControl};
-use tower_fallback::Fallback;
 
 use zakura_chain::{
     amount::{Amount, NegativeAllowed, NonNegative},
@@ -27,7 +27,7 @@ use zakura_chain::{
         testnet::{ConfiguredActivationHeights, Parameters},
         Network, NetworkUpgrade, GLOBAL_SHIELDED_BUDGET, ORCHARD_PROTOCOL_BLOCK_ACTION_LIMIT,
     },
-    primitives::{ed25519, x25519, Groth16Proof},
+    primitives::{ed25519, Groth16Proof},
     sapling,
     serialization::{
         AtLeastOne, DateTime32, ZcashDeserialize, ZcashDeserializeInto, ZcashSerialize,
@@ -1214,6 +1214,7 @@ async fn mempool_request_with_missing_input_is_rejected() {
     }
 }
 
+/// A present transparent input with an unlocked lock time is accepted.
 #[tokio::test]
 async fn mempool_request_with_present_input_is_accepted() {
     let mut state: MockService<_, _, _, _> = MockService::build().for_prop_tests();
@@ -1357,73 +1358,6 @@ async fn mempool_request_with_invalid_lock_time_is_rejected() {
         Err(TransactionError::LockedUntilAfterBlockTime(
             Utc.timestamp_opt(u32::MAX.into(), 0).unwrap()
         ))
-    );
-}
-
-#[tokio::test]
-async fn mempool_request_with_unlocked_lock_time_is_accepted() {
-    let mut state: MockService<_, _, _, _> = MockService::build().for_prop_tests();
-    let verifier = Verifier::new_for_tests(&Network::Mainnet, state.clone());
-
-    let height = NetworkUpgrade::Canopy
-        .activation_height(&Network::Mainnet)
-        .expect("Canopy activation height is specified");
-    let fund_height = (height - 1).expect("fake source fund block height is too small");
-    let (input, output, known_utxos) = mock_transparent_transfer(
-        fund_height,
-        true,
-        0,
-        Amount::try_from(10001).expect("invalid value"),
-    );
-
-    // Create a non-coinbase V4 tx with the last valid expiry height.
-    let tx = Transaction::V4 {
-        inputs: vec![input],
-        outputs: vec![output],
-        lock_time: LockTime::unlocked(),
-        expiry_height: height,
-        joinsplit_data: None,
-        sapling_shielded_data: None,
-    };
-
-    let input_outpoint = match tx.inputs()[0] {
-        transparent::Input::PrevOut { outpoint, .. } => outpoint,
-        transparent::Input::Coinbase { .. } => panic!("requires a non-coinbase transaction"),
-    };
-
-    tokio::spawn(async move {
-        state
-            .expect_request(zakura_state::Request::UnspentBestChainUtxo(input_outpoint))
-            .await
-            .expect("verifier should call mock state service with correct request")
-            .respond(zakura_state::Response::UnspentBestChainUtxo(
-                known_utxos
-                    .get(&input_outpoint)
-                    .map(|utxo| utxo.utxo.clone()),
-            ));
-
-        state
-            .expect_request_that(|req| {
-                matches!(
-                    req,
-                    zakura_state::Request::CheckBestChainTipNullifiersAndAnchors(_)
-                )
-            })
-            .await
-            .expect("verifier should call mock state service with correct request")
-            .respond(zakura_state::Response::ValidBestChainTipNullifiersAndAnchors);
-    });
-
-    let verifier_response = verifier
-        .oneshot(Request::Mempool {
-            transaction: tx.into(),
-            height,
-        })
-        .await;
-
-    assert!(
-        verifier_response.is_ok(),
-        "expected successful verification, got: {verifier_response:?}"
     );
 }
 
@@ -4551,10 +4485,11 @@ fn v4_deprecation_boundary() {
     for network in [
         configured_network_with_nu7(Some(Height(2_000_000))),
         Network::new_default_testnet(),
+        Network::Mainnet,
     ] {
         let nu7 = NetworkUpgrade::Nu7
             .activation_height(&network)
-            .expect("NU7 is scheduled on configured and default Testnet");
+            .expect("NU7 is scheduled on configured and default networks");
         assert!(
             verify_v4_at(
                 &network,
@@ -4585,14 +4520,13 @@ fn v4_deprecation_boundary() {
         );
     }
 
-    for network in [Network::Mainnet, configured_network_with_nu7(None)] {
-        assert_eq!(NetworkUpgrade::Nu7.activation_height(&network), None);
-        assert!(!NetworkUpgrade::is_nu7_active(&network, Height::MAX));
-        assert!(
-            verify_v4_at(&network, &transaction, Height::MAX).is_ok(),
-            "a network without an exact NU7 activation must keep accepting V4",
-        );
-    }
+    let network = configured_network_with_nu7(None);
+    assert_eq!(NetworkUpgrade::Nu7.activation_height(&network), None);
+    assert!(!NetworkUpgrade::is_nu7_active(&network, Height::MAX));
+    assert!(
+        verify_v4_at(&network, &transaction, Height::MAX).is_ok(),
+        "a network without an exact NU7 activation must keep accepting V4",
+    );
 }
 
 /// Returns a configured network whose latest upgrade is NU6.3 unless `nu7`
@@ -5396,8 +5330,7 @@ fn mock_sprout_join_split_data() -> (JoinSplitData<Groth16Proof>, ed25519::Signi
     let first_nullifier = sprout::note::Nullifier([0u8; 32].into());
     let second_nullifier = sprout::note::Nullifier([1u8; 32].into());
     let commitment = sprout::commitment::NoteCommitment::from([0u8; 32]);
-    let ephemeral_key =
-        x25519::PublicKey::from(&x25519::EphemeralSecret::random_from_rng(rand::thread_rng()));
+    let ephemeral_key = sprout::keys::EphemeralPublicKey::from([0u8; 32]);
     let random_seed = sprout::RandomSeed::from([0u8; 32]);
     let mac = sprout::note::Mac::zcash_deserialize(&[0u8; 32][..])
         .expect("Failure to deserialize dummy MAC");
@@ -5419,7 +5352,7 @@ fn mock_sprout_join_split_data() -> (JoinSplitData<Groth16Proof>, ed25519::Signi
     };
 
     // Create a usable signing key
-    let signing_key = ed25519::SigningKey::new(rand::thread_rng());
+    let signing_key = ed25519::SigningKey::new(rand_core::OsRng);
     let verification_key = ed25519::VerificationKey::from(&signing_key);
 
     // Populate join split data with the dummy join split.
@@ -6790,7 +6723,7 @@ fn orchard_shielded_data_for_mutation(tx: &mut Transaction) -> &mut orchard::Shi
 /// ever see that transaction's cache entry cold.
 ///
 /// It runs on [`zakura_test::MULTI_THREADED_RUNTIME`] because it reaches a global verifier.
-/// `tower-batch-control` spawns that verifier's batch worker on whichever runtime first touches
+/// The batch middleware spawns that verifier's batch worker on whichever runtime first touches
 /// it, so a per-test runtime would leave the worker cancelled for every test that ran afterwards.
 ///
 /// The three claims, in order:

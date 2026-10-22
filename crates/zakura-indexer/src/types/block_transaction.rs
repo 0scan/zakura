@@ -1,12 +1,11 @@
 //! Explorer-facing transaction summaries embedded in block details.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::TransactionEndpoint;
 
 /// Block-independent transaction data shared by confirmed and mempool details.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TransactionData {
     /// Transaction identifier in display byte order.
     pub txid: String,
@@ -106,7 +105,7 @@ pub struct TransactionData {
 }
 
 /// A transaction with its position in a canonical block.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BlockTransaction {
     /// Block-independent transaction data.
     #[serde(flatten)]
@@ -127,7 +126,7 @@ pub struct BlockTransaction {
 }
 
 /// One public transparent transaction input.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BlockTransactionInput {
     /// Transaction containing the spent output.
     #[serde(rename = "prev_txid")]
@@ -151,7 +150,7 @@ pub struct BlockTransactionInput {
 }
 
 /// One public transparent transaction output.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BlockTransactionOutput {
     /// Transaction containing this output.
     #[serde(rename = "txid")]

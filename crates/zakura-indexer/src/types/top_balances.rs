@@ -1,10 +1,9 @@
 //! Explorer-facing transparent top-balances contracts.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Cursor-paginated top-balances request.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct TopBalancesRequest {
     /// Maximum number of ranked addresses to return.
@@ -15,7 +14,7 @@ pub struct TopBalancesRequest {
 }
 
 /// One funded transparent address ordered by current indexed balance.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TopBalanceEntry {
     /// One-based position in the current ranking.
     pub rank: u64,
@@ -31,7 +30,7 @@ pub struct TopBalanceEntry {
 }
 
 /// Aggregate values displayed above the top-balances table.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TopBalancesSummary {
     /// Number of transparent addresses with a non-zero balance.
     pub funded_transparent_address_count: u64,
@@ -53,7 +52,7 @@ pub struct TopBalancesSummary {
 }
 
 /// Cursor metadata for a top-balances page.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TopBalancesPagination {
     /// Maximum number of entries requested.
     pub limit: u32,
@@ -69,7 +68,7 @@ pub struct TopBalancesPagination {
 }
 
 /// A stable page from the transparent-address balance ranking.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TopBalancesResponse {
     /// Ranked funded transparent addresses.
     pub entries: Vec<TopBalanceEntry>,

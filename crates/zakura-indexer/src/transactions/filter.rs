@@ -1,12 +1,11 @@
 //! Typed transaction-list selectors shared by storage and queries.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{ShieldedFlow, ShieldedPool, TransactionClassification, TransactionKind};
 
 /// Top-level transaction kind selector.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionKindFilter {
     /// Include every transaction kind.
@@ -33,7 +32,7 @@ impl TransactionKindFilter {
 }
 
 /// Observable shielded-flow selector.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShieldedFlowFilter {
     /// Include every observable shielded flow.
@@ -63,7 +62,7 @@ impl ShieldedFlowFilter {
 }
 
 /// Shielded-pool selector.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShieldedPoolFilter {
     /// Include every shielded pool.

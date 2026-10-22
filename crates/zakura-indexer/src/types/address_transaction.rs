@@ -1,12 +1,11 @@
 //! Explorer-facing transaction rows scoped to one transparent address.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::{ShieldedFlow, ShieldedPool, TransactionKind};
 
 /// One canonical transaction's public effect on a requested transparent address.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressTransactionListItem {
     /// Transaction identifier in display byte order.
     pub txid: String,

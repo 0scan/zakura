@@ -1,8 +1,11 @@
 //! Explorer JSON-RPC adapters for [`RpcImpl`].
 
+// Each handler splits its body by `indexer`; without it the disabled branch is the tail.
+#![cfg_attr(not(feature = "indexer"), allow(clippy::needless_return))]
+
+use crate::server::jsonrpc::RpcResult as Result;
 #[cfg(feature = "indexer")]
 use chrono::Utc;
-use jsonrpsee::core::RpcResult as Result;
 #[cfg(feature = "indexer")]
 use zakura_chain::{
     block::{self, Height},

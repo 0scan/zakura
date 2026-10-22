@@ -1,12 +1,11 @@
 //! Cursor-paginated transaction list responses.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::TransactionListItem;
 
 /// Pagination metadata for [`TransactionsResponse`].
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TransactionsPagination {
     /// Maximum number of requested records.
@@ -26,7 +25,7 @@ pub struct TransactionsPagination {
 }
 
 /// A newest-first page of canonical transactions.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TransactionsResponse {
     /// Matching canonical transactions ordered newest first.
     pub transactions: Vec<TransactionListItem>,

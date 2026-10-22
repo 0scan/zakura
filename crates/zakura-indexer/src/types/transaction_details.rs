@@ -1,12 +1,11 @@
 //! Complete explorer response for one canonical transaction.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::{BlockTransaction, ShieldedFlow, ShieldedPool, TransactionKind, TransactionStatus};
 
 /// Transaction details assembled from canonical state and indexed explorer data.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TransactionDetails {
     /// Raw transaction fields, public accounting data, and transparent inputs and outputs.
     #[serde(flatten)]

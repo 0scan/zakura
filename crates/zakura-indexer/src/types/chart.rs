@@ -1,10 +1,9 @@
 //! Explorer chart snapshots and date-range pagination.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Inclusive UTC date range for chart snapshots.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ChartDataRequest {
     /// First date to return, formatted as `YYYY-MM-DD`.
@@ -19,7 +18,7 @@ pub struct ChartDataRequest {
 
 /// One daily snapshot, with interval fields measured since the previous snapshot.
 #[allow(missing_docs)]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ChartDataEntry {
     pub date_key: String,
     pub height: u32,
@@ -106,7 +105,7 @@ pub struct ChartDataEntry {
 }
 
 /// A page of chart snapshots sorted from oldest to newest.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ChartDataResponse {
     /// Daily entries in ascending date order.
     pub entries: Vec<ChartDataEntry>,

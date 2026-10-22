@@ -1,10 +1,9 @@
 //! Explorer-facing transparent address summary types.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 /// Canonical transaction and block context for address activity.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressActivity {
     /// Transaction identifier in display byte order.
     pub txid: String,
@@ -24,7 +23,7 @@ pub struct AddressActivity {
 }
 
 /// Earliest indexed public funding event for a transparent address.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressFirstFunding {
     /// Canonical transaction and block context.
     #[serde(flatten)]
@@ -41,7 +40,7 @@ pub struct AddressFirstFunding {
 }
 
 /// General indexed information for one transparent address.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AddressSummary {
     /// Transparent address in its network encoding.
     pub address: String,

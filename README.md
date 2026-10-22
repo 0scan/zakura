@@ -49,7 +49,7 @@ The installer can set up either standard Zakura or its
 You can run Zakura using our [Docker
 image](https://hub.docker.com/r/zakuracore/zakura/tags) or install it manually.
 The zcashd-compatible split-container mode uses the
-[zakuracore/zcashd:v1.1.0 image](https://hub.docker.com/r/zakuracore/zcashd/tags).
+[zakuracore/zcashd:v1.3.0 image](https://hub.docker.com/r/zakuracore/zcashd/tags).
 
 This command will run our latest release and sync it to the tip:
 
@@ -85,8 +85,7 @@ compiler. Below are quick summaries for installing these dependencies.
    - **libclang**, which is a library that comes under various names, typically
      `libclang`, `libclang-dev`, `llvm`, or `llvm-dev`;
    - **clang** or another C++ compiler (`g++`, which is for all platforms, or
-     `Xcode`, which is for macOS);
-   - **[`protoc`](https://grpc.io/docs/protoc-installation/)** (optional).
+     `Xcode`, which is for macOS).
 
 </details>
 
@@ -99,7 +98,7 @@ compiler. Below are quick summaries for installing these dependencies.
 </summary>
 
 ```sh
-sudo pacman -S rust clang protobuf
+sudo pacman -S rust clang
 ```
 
 Note that the package `clang` includes `libclang` as well.
@@ -115,7 +114,7 @@ cargo install --locked zakura
 Alternatively, you can install it from GitHub:
 
 ```sh
-cargo install --git https://github.com/zakura-core/zakura --tag v1.6.0 zakura
+cargo install --git https://github.com/zakura-core/zakura --tag v1.7.0 zakura
 ```
 
 Native x86-64 builds automatically use Pasta field assembly when the build

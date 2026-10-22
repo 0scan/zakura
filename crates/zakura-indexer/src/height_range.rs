@@ -49,6 +49,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::reversed_empty_ranges,
+        reason = "the inverted range is the input under test"
+    )]
     fn rejects_an_inverted_height_range() {
         assert!(TransactionHeightRange::new(2..=1).is_err());
     }

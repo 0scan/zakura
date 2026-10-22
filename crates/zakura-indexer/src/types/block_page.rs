@@ -1,12 +1,11 @@
 //! Paginated block query responses.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::BlockRecord;
 
 /// Pagination metadata for [`BlocksResponse`].
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct BlocksPagination {
     /// Maximum number of requested records.
@@ -29,7 +28,7 @@ pub struct BlocksPagination {
 }
 
 /// A newest-first page of indexed canonical blocks.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BlocksResponse {
     /// Canonical blocks ordered from newest to oldest.
     pub blocks: Vec<BlockRecord>,

@@ -1,12 +1,11 @@
 //! Complete explorer response for one canonical block.
 
-use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::{BlockRecord, BlockTransaction};
 
 /// Block details assembled from canonical state and indexed explorer data.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BlockDetails {
     /// Fields shared with the recent-block list.
     #[serde(flatten)]
@@ -74,7 +73,7 @@ pub struct BlockDetails {
 }
 
 /// Note commitment tree sizes after a block.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct BlockTrees {
     /// Sapling note commitment tree information.
     pub sapling: TreeSize,
@@ -87,14 +86,14 @@ pub struct BlockTrees {
 }
 
 /// The number of notes in a note commitment tree.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct TreeSize {
     /// Number of notes in the tree.
     pub size: u64,
 }
 
 /// One chain value pool balance, compatible with `getblock` accounting data.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ValuePoolBalance {
     /// Pool name, omitted for the aggregate chain supply.
     #[serde(skip_serializing_if = "Option::is_none")]

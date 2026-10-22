@@ -25,7 +25,7 @@
 //! Main's `request` module stays until the block sync adoption replaces it.
 
 mod cadence;
-pub(crate) use cadence::{CadenceBuckets, CadenceCharge, CadenceSendError, CadenceSender};
+pub(crate) use cadence::{CadenceBuckets, CadenceCharge, CadenceSendError, CadenceSender, RowSend};
 
 mod request;
 pub(crate) use request::{
@@ -34,14 +34,15 @@ pub(crate) use request::{
 
 mod serve;
 pub(crate) use serve::{
-    Produce, Push, PushPermit, Responded, ResponseCap, ResponseSink, Serve, ServeCapacity,
+    Completion, CompletionId, Completions, ExecutionSlots, OutputOrder, Produce, Push, PushPermit,
+    PushSend, Responded, ResponseCap, ResponseSink, ResponsesWritten, Serve, ServeCapacity,
     ServeConfigError, ServeEnd, ServeLimits, ServeViolation, SinkError, SinkProgress, WorkLease,
 };
 
 mod reservations;
 pub(crate) use reservations::{
-    ClaimRefused, Claimed, Ended, PoolEntry, PrecheckByRequest, PrecheckSlot, ReservationPool,
-    Reservations, ReserveRefused, ResponsePrecheck, SharedReservations,
+    shrink_after_peak, ClaimRefused, Claimed, Ended, PoolEntry, PrecheckByRequest, PrecheckSlot,
+    ReservationPool, Reservations, ReserveRefused, ResponsePrecheck, SharedReservations,
 };
 
 mod session_capacity;

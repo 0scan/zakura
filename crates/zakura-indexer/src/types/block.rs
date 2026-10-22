@@ -1,10 +1,9 @@
 //! Explorer-facing block records.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Explorer-facing summary of one canonical block.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BlockRecord {
     /// Block height, encoded as a decimal string for explorer compatibility.
     pub height: String,

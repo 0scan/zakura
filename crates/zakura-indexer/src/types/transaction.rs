@@ -1,10 +1,9 @@
 //! Explorer-facing transaction list items.
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Current inclusion and finality state of an explorer transaction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionStatus {
     /// The transaction is in the canonical chain but can still be reorganized.
@@ -16,7 +15,7 @@ pub enum TransactionStatus {
 }
 
 /// The primary public-value domain used by a transaction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionKind {
     /// A transaction containing at least one shielded component.
@@ -28,7 +27,7 @@ pub enum TransactionKind {
 }
 
 /// The observable direction of value crossing the transparent/shielded boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShieldedFlow {
     /// Public value enters one or more shielded pools.
@@ -42,7 +41,7 @@ pub enum ShieldedFlow {
 }
 
 /// The shielded pool or set of pools touched by a transaction.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShieldedPool {
     /// The legacy Sprout pool.
@@ -58,7 +57,7 @@ pub enum ShieldedPool {
 }
 
 /// The kind of a representative transaction source or destination.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionEndpointType {
     /// Newly issued value from a block's coinbase transaction.
@@ -76,7 +75,7 @@ pub enum TransactionEndpointType {
 }
 
 /// One representative transaction source or destination.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TransactionEndpoint {
     /// Endpoint kind.
     #[serde(rename = "type")]
@@ -109,7 +108,7 @@ pub struct TransactionClassification {
 }
 
 /// A compact canonical transaction summary for explorer list views.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TransactionListItem {
     /// Transaction identifier in display byte order.
     pub txid: String,
