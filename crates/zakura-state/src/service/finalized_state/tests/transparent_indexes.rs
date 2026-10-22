@@ -212,11 +212,16 @@ fn commit_contextual(state: &mut FinalizedState, block: Arc<Block>) {
 }
 
 /// Returns the raw contents of every column family that consensus or block serving reads, which
-/// excludes the transparent index column families and the storage policy metadata.
+/// excludes the transparent index column families, the storage policy metadata, and the
+/// explorer indexes (their balance-derived stats follow the transparent indexes).
 fn consensus_column_families(db: &ZakuraDb) -> Vec<(&'static str, Vec<(Vec<u8>, Vec<u8>)>)> {
     STATE_COLUMN_FAMILIES_IN_CODE
         .iter()
-        .filter(|cf| !TRANSPARENT_INDEX_COLUMN_FAMILIES.contains(cf) && **cf != PRUNING_METADATA)
+        .filter(|cf| {
+            !TRANSPARENT_INDEX_COLUMN_FAMILIES.contains(cf)
+                && **cf != PRUNING_METADATA
+                && !cf.starts_with("explorer_")
+        })
         .map(|cf| (*cf, db.raw_column_family_entries_for_test(cf)))
         .collect()
 }
