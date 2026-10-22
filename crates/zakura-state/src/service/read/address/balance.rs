@@ -116,8 +116,6 @@ fn chain_transparent_balance_change(
         .map(|tip| (tip + 1).unwrap())
         .unwrap_or(Height(0));
 
-    let chain = Arc::make_mut(&mut chain);
-
     assert!(
         chain.non_finalized_root_height() <= required_chain_root,
         "unexpected chain gap: the best chain is updated after its previous root is finalized"
@@ -133,9 +131,15 @@ fn chain_transparent_balance_change(
 
     // Correctness: some balances might have duplicate creates or spends,
     // so we pop root blocks from `chain` until the chain root is a child of the finalized tip.
-    while chain.non_finalized_root_height() < required_chain_root {
-        // TODO: just revert the transparent balances, to improve performance
-        chain.pop_root();
+    //
+    // The chain is shared, so popping deep-clones it. Only clone when the finalized tip has
+    // overtaken the chain root, which is rare; otherwise read the shared chain directly.
+    if chain.non_finalized_root_height() < required_chain_root {
+        let chain = Arc::make_mut(&mut chain);
+        while chain.non_finalized_root_height() < required_chain_root {
+            // TODO: just revert the transparent balances, to improve performance
+            chain.pop_root();
+        }
     }
 
     chain.partial_transparent_balance_change(addresses)
