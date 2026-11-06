@@ -1,6 +1,6 @@
 //! Bounded canonical-state reads used by transaction details.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use tokio::time;
 use tower::ServiceExt;
@@ -84,7 +84,7 @@ where
 
 pub(super) async fn spent_output_statuses<State>(
     read_state: State,
-    transaction: &Arc<Transaction>,
+    transaction: &Transaction,
 ) -> Result<HashMap<OutPoint, bool>, Error>
 where
     State: ReadState,

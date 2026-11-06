@@ -62,12 +62,12 @@ where
         network,
         hash,
         height,
-        block.header.previous_block_hash,
+        block.view().header().previous_block_hash,
     )
     .await?;
     let (transparent_inputs, spent_outputs) = tokio::try_join!(
-        state::load_transparent_inputs(read_state.clone(), &block),
-        state::load_spent_output_statuses(read_state.clone(), &block),
+        state::load_transparent_inputs(read_state.clone(), block.view()),
+        state::load_spent_output_statuses(read_state.clone(), block.view()),
     )?;
     state_details.confirmations = state::confirmations(read_state, hash).await?;
 
@@ -77,7 +77,7 @@ where
         let summary = block_record_from_state(&network_for_build, summary_data)?;
         let block_transactions = build_block_transactions(
             &network_for_build,
-            &block_for_index,
+            block_for_index.view(),
             height,
             hash,
             &transparent_inputs,
@@ -90,7 +90,7 @@ where
 
     Ok(Some(response::assemble(
         network,
-        block,
+        block.view(),
         summary,
         height,
         state_details,
@@ -124,13 +124,13 @@ mod tests {
             async move {
                 Ok::<_, BoxError>(match request {
                     ReadRequest::BlockAndSize(_) => {
-                        ReadResponse::BlockAndSize(Some((block.clone(), serialized_size)))
+                        ReadResponse::BlockAndSize(Some((block.clone().into(), serialized_size)))
                     }
                     ReadRequest::Explorer(ExplorerReadRequest::BlockSummaries(heights)) => {
                         assert_eq!(&*heights, &[Height(0)]);
                         ReadResponse::Explorer(ExplorerReadResponse::BlockSummaries(vec![Some(
                             ExplorerBlockSummary {
-                                block: block.clone(),
+                                block: block.clone().into(),
                                 serialized_size: u32::try_from(serialized_size)
                                     .expect("test block size fits in u32"),
                                 total_fees_zat: 0,
@@ -142,7 +142,7 @@ mod tests {
                         ReadResponse::Explorer(ExplorerReadResponse::TransparentOutputs(Vec::new()))
                     }
                     ReadRequest::BlockHeader(_) => ReadResponse::BlockHeader {
-                        header: block.header.clone(),
+                        header: block.header.clone().into(),
                         hash: block.hash(),
                         height: Height(0),
                         next_block_hash: None,

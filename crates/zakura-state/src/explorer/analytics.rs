@@ -2,11 +2,11 @@
 
 #![cfg(feature = "indexer")]
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use zakura_chain::{
     amount::{Amount, NegativeAllowed, NonNegative},
-    block::{Block, Height},
+    block::{BlockRef, Height},
     parameters::{
         subsidy::{
             block_subsidy, founders_reward, funding_stream_values, is_zip234_active, miner_subsidy,
@@ -66,7 +66,7 @@ struct BlockTransactionStats {
 /// Derives the compact block record shared by durable analytics and live suffix reads.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn derive_block_stats(
-    block: &Arc<Block>,
+    block: &BlockRef,
     height: Height,
     serialized_size: u32,
     value_pools: ValueBalance<NonNegative>,
@@ -78,7 +78,7 @@ pub(super) fn derive_block_stats(
     let mut transaction_stats = BlockTransactionStats::default();
     let mut total_fees_zat = 0_u64;
 
-    for (transaction_index, transaction) in block.transactions.iter().enumerate() {
+    for (transaction_index, transaction) in block.transactions().enumerate() {
         let transaction_utxos = transaction
             .inputs()
             .iter()
@@ -112,10 +112,10 @@ pub(super) fn derive_block_stats(
         }
     }
 
-    let transaction_count = u32::try_from(block.transactions.len())
+    let transaction_count = u32::try_from(block.transactions().len())
         .expect("verified block transaction count fits in u32");
     let accepted_work = block
-        .header
+        .header()
         .difficulty_threshold
         .to_work()
         .expect("verified block target converts to work")
@@ -145,13 +145,13 @@ pub(super) fn derive_block_stats(
     ExplorerBlockStats {
         height: height.0,
         hash: block.hash(),
-        timestamp: block.header.time.timestamp(),
+        timestamp: block.header().time.timestamp(),
         transaction_count,
         serialized_size,
         difficulty: format!(
             "{:.6}",
             block
-                .header
+                .header()
                 .difficulty_threshold
                 .relative_to_network(network)
         ),
@@ -632,7 +632,7 @@ fn has_zip318_schedule_shape(
 
 fn add_mining_accounting(
     interval: &mut ExplorerIntervalStats,
-    block: &Block,
+    block: &BlockRef,
     height: Height,
     total_fees_zat: u64,
     previous_pool_nsm: i64,
@@ -667,8 +667,8 @@ fn add_mining_accounting(
     let miner = miner_subsidy(height, network, subsidy)
         .expect("verified block subsidy has a valid miner share");
     let coinbase = block
-        .transactions
-        .first()
+        .transactions()
+        .next()
         .expect("verified blocks contain a coinbase transaction");
     let transparent_output = coinbase.outputs().iter().fold(0_u128, |total, output| {
         total

@@ -55,7 +55,7 @@ impl DiskWriteBatch {
         funded_transparent_address_count: u64,
     ) {
         let block = crate::explorer::analytics::derive_block_stats(
-            &finalized.block,
+            finalized.block.view(),
             finalized.height,
             serialized_size,
             value_pools,

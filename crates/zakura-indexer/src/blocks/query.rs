@@ -163,23 +163,24 @@ pub(crate) fn block_record_from_state(
     let height = summary.block.coinbase_height().ok_or_else(|| {
         Error::StateResponse("canonical block is missing its coinbase height".to_string())
     })?;
-    let transaction_count = u32::try_from(summary.block.transactions.len())
+    let transaction_count = u32::try_from(summary.block.view().transactions().len())
         .map_err(|_| Error::Calculation("block transaction count exceeds u32".to_string()))?;
-    let coinbase = summary.block.transactions.first().ok_or_else(|| {
+    let coinbase = summary.block.view().transactions().next().ok_or_else(|| {
         Error::StateResponse("canonical block is missing its coinbase transaction".to_string())
     })?;
     let (miner_address, miner_pool) = super::miner_attribution::identify_miner(coinbase, network);
     Ok(BlockRecord {
         height: height.0.to_string(),
         hash: hash.to_string(),
-        timestamp: summary.block.header.time.timestamp().to_string(),
+        timestamp: summary.block.view().header().time.timestamp().to_string(),
         transaction_count,
         size: summary.serialized_size,
         difficulty: format!(
             "{:.6}",
             summary
                 .block
-                .header
+                .view()
+                .header()
                 .difficulty_threshold
                 .relative_to_network(network)
         ),

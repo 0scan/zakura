@@ -44,17 +44,19 @@ mod tests;
 pub use config::{
     check_and_delete_old_databases, check_and_delete_old_state_databases,
     database_format_version_on_disk, state_database_format_version_on_disk, Config, PruningConfig,
-    StorageMode,
+    StorageMode, DEFAULT_READ_RESULT_CEILING_BYTES, DEFAULT_READ_RESULT_PEERS,
+    READ_RESULT_BLOCKS_PER_PEER,
 };
 pub use constants::{
     state_database_format_version_in_code, MAX_BLOCK_REORG_HEIGHT,
     MAX_HISTORICAL_TREE_REPLAY_BLOCKS,
 };
 pub use error::{
-    AwaitBlockInfoError, BoxError, CloneError, CommitBlockError, CommitCheckpointVerifiedError,
-    CommitSemanticallyVerifiedError, DuplicateNullifierError, HistoricalSubtreeUnavailable,
-    HistoricalSubtreeUnavailableReason, HistoricalTreeUnavailable, MissingSproutTipTree,
-    PreciousError, StateInitError, TransparentIndexesUnavailable, ValidateContextError,
+    AwaitBlockInfoError, BlockHeaderNotFound, BoxError, CloneError, CommitBlockError,
+    CommitCheckpointVerifiedError, CommitSemanticallyVerifiedError, DuplicateNullifierError,
+    HistoricalSubtreeUnavailable, HistoricalSubtreeUnavailableReason, HistoricalTreeUnavailable,
+    MissingSproutTipTree, PreciousError, StateInitError, TransparentIndexesUnavailable,
+    ValidateContextError,
 };
 #[cfg(feature = "indexer")]
 pub use explorer::{
@@ -79,9 +81,9 @@ pub use request::{
 pub use request::Spend;
 
 pub use response::{
-    AnyTx, BlockSyncBodyMetadata, GetBlockTemplateChainInfo, KnownBlock, MinedTx,
-    NonFinalizedBlock, NonFinalizedBlocksListener, ParentInputs, PreparedMinedRelayEligibility,
-    ReadResponse, Response,
+    AnyTx, AuthDataCommitment, BlockSyncBodyMetadata, GetBlockTemplateChainInfo, KnownBlock,
+    MinedTx, NonFinalizedBlock, NonFinalizedBlocksListener, ParentInputs,
+    PreparedMinedRelayEligibility, ReadResponse, Response,
 };
 #[cfg(any(test, feature = "header-fuzz"))]
 pub use service::finalized_state::{replay_recovery_rows_bytes, RecoveryRowsReplaySummary};

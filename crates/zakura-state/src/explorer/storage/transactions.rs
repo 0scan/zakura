@@ -293,7 +293,7 @@ impl DiskWriteBatch {
         spent_utxos: &HashMap<OutPoint, Utxo>,
     ) {
         let mut address_records = HashMap::new();
-        for (transaction_index, transaction) in finalized.block.transactions.iter().enumerate() {
+        for (transaction_index, transaction) in finalized.block.view().transactions().enumerate() {
             let location = TransactionLocation::from_usize(finalized.height, transaction_index);
             let facts = ExplorerTransactionFacts::from_verified_transaction(
                 transaction,

@@ -1,12 +1,11 @@
 //! Address summary reads and newest-first canonical transaction history.
 
-use std::{collections::HashMap, ops::RangeInclusive, sync::Arc};
+use std::{collections::HashMap, ops::RangeInclusive};
 
 use tower::ServiceExt;
 use zakura_chain::{
     block::{Hash, Height},
     parameters::Network,
-    transaction::Transaction,
     transparent::Address,
 };
 use zakura_state::{
@@ -312,7 +311,7 @@ where
                 )
             })
         })
-        .collect::<Result<Vec<Arc<Transaction>>, Error>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
     let outpoints = transactions
         .iter()
         .flat_map(|transaction| transaction.inputs())

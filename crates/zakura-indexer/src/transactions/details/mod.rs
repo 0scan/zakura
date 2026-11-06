@@ -116,7 +116,7 @@ mod tests {
                     ReadRequest::Transaction(requested_txid) => {
                         assert_eq!(requested_txid, txid);
                         ReadResponse::Transaction(Some(MinedTx::new(
-                            transaction,
+                            transaction.into(),
                             Height(0),
                             1,
                             block_time,

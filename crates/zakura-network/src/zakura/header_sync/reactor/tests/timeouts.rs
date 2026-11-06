@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -8,10 +9,14 @@ use tokio::sync::Notify;
 use zakura_header_chain::SourceId;
 use zakura_node_services::header_chain as port;
 
+use super::super::dispatch::StorageDispatch;
+use super::super::repair::vct_send_retry_attribution;
 use super::*;
+use crate::zakura::header_sync::scheduler::repair::MAX_TARGET_REFUSALS_PER_SUPPLIER;
 use crate::zakura::{
     header_sync::scheduler::peer_work::HEADER_CHUNK_BUDGET_CAPACITY_V1, testkit::TraceCapture,
 };
+use tokio::time;
 
 #[derive(Debug)]
 struct PendingVctLocalPort {
@@ -153,7 +158,7 @@ impl port::Port for PendingVctLocalPort {
     }
 }
 
-fn seed_vct_active_request(
+pub(super) fn seed_vct_active_request(
     reactor: &mut HeaderSyncReactor,
     snapshot: &zakura_header_chain::EngineSnapshot,
     peer: ZakuraPeerId,
@@ -198,14 +203,16 @@ fn seed_vct_active_request(
         repair_generation: 11,
     };
     active.phase = phase;
+    let advertised = active.target.status.clone();
     reactor
         .peer_work_queue
         .bind_repair_episode_for_test(owner.into(), context.episode);
     let mut task = RepairRequirement::new(owner, target.height, 11);
     task.state = RepairPolicyState::Assigned {
         context: context.clone(),
+        advertised,
     };
-    reactor.vct_repair.insert(task);
+    reactor.state.vct_repair.insert(task);
     (source, owner.into(), context)
 }
 
@@ -381,12 +388,16 @@ impl VctLocalFixture {
 
     fn dispatch(&mut self) {
         let operation = self.operation();
-        assert!(self.reactor.dispatch_action(operation));
+        assert!(matches!(
+            self.reactor.dispatch_action(operation),
+            StorageDispatch::Started(_)
+        ));
     }
 
     fn assert_single_operation_through_timeouts(&mut self) {
         let mut deadline = Instant::now();
         self.reactor
+            .state
             .request_deadlines
             .insert(self.peer.clone(), deadline);
         for _ in 0..3 {
@@ -408,7 +419,7 @@ impl VctLocalFixture {
                     .map(|active| active.phase),
                 Some(self.phase)
             );
-            deadline = self.reactor.request_deadlines[&self.peer];
+            deadline = self.reactor.state.request_deadlines[&self.peer];
         }
     }
 
@@ -444,6 +455,8 @@ struct ReadyVctRepairFixture {
     target: zakura_header_chain::Frontier,
     owner: zakura_header_chain::BodyWorkOwner,
     context: zakura_header_chain::VctRepairContext,
+    /// Bumps the advertised suffix work, so later statuses differ from earlier ones.
+    status_revision: u8,
 }
 
 impl ReadyVctRepairFixture {
@@ -500,6 +513,7 @@ impl ReadyVctRepairFixture {
             target,
             owner,
             context,
+            status_revision: 0,
         }
     }
 
@@ -508,7 +522,7 @@ impl ReadyVctRepairFixture {
         repair.state = RepairPolicyState::Ready {
             context: self.context.clone(),
         };
-        self.reactor.vct_repair.insert(repair);
+        self.reactor.state.vct_repair.insert(repair);
     }
 
     fn status(&self) -> Status {
@@ -517,7 +531,9 @@ impl ReadyVctRepairFixture {
             work_anchor_hash: self.anchor.hash,
             selected_tip_height: self.snapshot.frontiers.header_best.height,
             selected_tip_hash: self.snapshot.frontiers.header_best.hash,
-            suffix_cumulative_work: zakura_chain::work::difficulty::U256::from(2_u8),
+            suffix_cumulative_work: zakura_chain::work::difficulty::U256::from(
+                2_u8 + self.status_revision,
+            ),
             oldest_retained_height: self.anchor.height,
             max_headers_per_response: u32::try_from(self.context.selected_header_count())
                 .expect("the fixture repair range fits u32"),
@@ -556,6 +572,11 @@ impl ReadyVctRepairFixture {
             })
             .collect();
         (peers, outbounds)
+    }
+
+    /// Make later advertisements differ from every earlier one.
+    fn change_status(&mut self) {
+        self.status_revision += 1;
     }
 
     fn advertise(&mut self, peers: &[ZakuraPeerId], first_session_id: u64) {
@@ -610,7 +631,7 @@ async fn pending_vct_prepare_and_apply_emit_one_fatal_event_at_thirty_minutes() 
         let mut fixture = VctLocalFixture::new(PendingVctLocalPort::pending(true), phase);
         fixture.dispatch();
         poll_pending_operation(&mut fixture.reactor);
-        fixture.reactor.request_deadlines.insert(
+        fixture.reactor.state.request_deadlines.insert(
             fixture.peer.clone(),
             Instant::now() + fixture.reactor.startup.request_timeout,
         );
@@ -785,8 +806,11 @@ fn normal_header_operations_have_no_vct_fatal_deadline() {
         entries: active.entries.clone(),
     };
 
-    assert!(reactor.dispatch_action(action));
-    assert!(reactor.vct_local_operation.is_none());
+    assert!(matches!(
+        reactor.dispatch_action(action),
+        StorageDispatch::Started(_)
+    ));
+    assert!(reactor.state.vct_local_operation.is_none());
 }
 
 #[test]
@@ -801,18 +825,21 @@ fn request_timeout_retires_owned_work_and_wakes_maintenance() {
     let peer = peer();
     seed_applying_request(&mut reactor, &snapshot, peer.clone(), 7);
     let deadline = Instant::now();
-    reactor.request_deadlines.insert(peer.clone(), deadline);
+    reactor
+        .state
+        .request_deadlines
+        .insert(peer.clone(), deadline);
 
     assert!(reactor.next_maintenance_deadline() <= deadline);
     reactor.retire_timed_out_requests(deadline);
 
     assert!(reactor.peer_work_queue.active(&peer).is_none());
-    assert!(!reactor.request_deadlines.contains_key(&peer));
+    assert!(!reactor.state.request_deadlines.contains_key(&peer));
     assert!(actions.try_recv().is_err());
 }
 
 #[test]
-fn vct_request_timeout_keeps_required_work_and_releases_a_disconnected_supplier() {
+fn vct_request_timeout_keeps_required_work_and_charges_a_disconnected_supplier() {
     let mut startup = startup(CancellationToken::new());
     let anchor = zakura_header_chain::Frontier::new(startup.anchor.0, startup.anchor.1);
     let snapshot = committed_snapshot(anchor);
@@ -839,6 +866,7 @@ fn vct_request_timeout_keeps_required_work_and_releases_a_disconnected_supplier(
         repair_status.selected_tip_height,
         repair_status.selected_tip_hash,
     );
+    let advertised = repair_status.clone();
     let mut task = RepairRequirement::new(owner, target.height, 11);
     let deadline = Instant::now();
     let context = zakura_header_chain::VctRepairContext::unconstrained(
@@ -848,8 +876,9 @@ fn vct_request_timeout_keeps_required_work_and_releases_a_disconnected_supplier(
     );
     task.state = RepairPolicyState::Assigned {
         context: context.clone(),
+        advertised,
     };
-    reactor.vct_repair.insert(task);
+    reactor.state.vct_repair.insert(task);
     reactor
         .peer_work_queue
         .active_mut(&peer)
@@ -866,12 +895,13 @@ fn vct_request_timeout_keeps_required_work_and_releases_a_disconnected_supplier(
         .active_mut(&peer)
         .expect("the fixture has one repair request")
         .phase = HeaderTargetPhase::Receiving;
-    reactor.request_deadlines.insert(peer, deadline);
+    reactor.state.request_deadlines.insert(peer, deadline);
 
     assert!(reactor.next_maintenance_deadline() <= deadline);
     reactor.retire_timed_out_requests(deadline);
 
     let task = reactor
+        .state
         .vct_repair
         .current()
         .expect("a timeout cannot discard a current repair requirement");
@@ -880,7 +910,10 @@ fn vct_request_timeout_keeps_required_work_and_releases_a_disconnected_supplier(
         RepairPolicyState::Ready { context: retained } if retained == &context
     ));
     assert_eq!(task.attempts, 1);
-    assert!(!task.tried_sources.contains(&source));
+    assert!(
+        task.tried_sources.contains(&source),
+        "a departed supplier's timeout holds for one cooldown"
+    );
     assert!(task.next_deadline().is_none());
 }
 
@@ -899,26 +932,29 @@ fn vct_local_phase_deadlines_preserve_operation_ownership() {
             seed_vct_active_request(&mut reactor, &snapshot, peer.clone(), 7, phase);
         let prior = zakura_header_chain::SourceId::from_digest([0x22; 32]);
         let task = reactor
+            .state
             .vct_repair
             .current_mut()
             .expect("the fixture has one repair task");
         task.tried_sources.insert(prior);
         task.attempts = 1;
         let deadline = Instant::now();
-        reactor.request_deadlines.insert(peer.clone(), deadline);
+        reactor
+            .state
+            .request_deadlines
+            .insert(peer.clone(), deadline);
 
         reactor.retire_timed_out_requests(deadline);
 
         let task = reactor
+            .state
             .vct_repair
             .current()
             .expect("a local operation deadline keeps the current repair");
-        assert_eq!(
-            task.state,
-            RepairPolicyState::Assigned {
-                context: context.clone()
-            }
-        );
+        assert!(matches!(
+            &task.state,
+            RepairPolicyState::Assigned { context: assigned, .. } if assigned == &context
+        ));
         assert_eq!(task.tried_sources, [prior].into_iter().collect());
         assert!(!task.tried_sources.contains(&source));
         assert_eq!(task.attempts, 1);
@@ -929,9 +965,10 @@ fn vct_local_phase_deadlines_preserve_operation_ownership() {
                 .map(|active| active.phase),
             Some(phase)
         );
-        assert!(reactor.request_deadlines[&peer] > deadline);
+        assert!(reactor.state.request_deadlines[&peer] > deadline);
         assert_eq!(
             reactor
+                .state
                 .vct_repair_stall
                 .expect("the local operation starts the generation stall clock")
                 .outcome,
@@ -958,6 +995,7 @@ async fn pending_vct_prepare_remains_single_until_its_failure_completes() {
         .is_none());
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the attributed local failure keeps the repair");
@@ -989,10 +1027,16 @@ async fn pending_vct_apply_remains_single_until_success() {
         .is_none());
     assert!(!fixture
         .reactor
+        .state
         .request_deadlines
         .contains_key(&fixture.peer));
     assert_eq!(
-        fixture.reactor.vct_repair.current().map(|task| &task.state),
+        fixture
+            .reactor
+            .state
+            .vct_repair
+            .current()
+            .map(|task| &task.state),
         Some(&RepairPolicyState::Completed)
     );
 }
@@ -1016,7 +1060,7 @@ async fn obsolete_vct_generation_retires_ownership_and_ignores_late_apply() {
         .peer_work_queue
         .active(&fixture.peer)
         .is_none());
-    assert!(fixture.reactor.vct_repair.current().is_none());
+    assert!(fixture.reactor.state.vct_repair.current().is_none());
     assert_eq!(fixture.reactor.pending_port_operations.len(), 1);
 
     port.apply_release.notify_one();
@@ -1034,7 +1078,7 @@ async fn obsolete_vct_generation_retires_ownership_and_ignores_late_apply() {
         .peer_work_queue
         .active(&fixture.peer)
         .is_none());
-    assert!(fixture.reactor.vct_repair.current().is_none());
+    assert!(fixture.reactor.state.vct_repair.current().is_none());
     assert_eq!(port.apply_calls.load(Ordering::SeqCst), 1);
 }
 
@@ -1058,6 +1102,7 @@ fn vct_admission_failures_preserve_retry_policy_state() {
         );
         let prior = zakura_header_chain::SourceId::from_digest([0x22; 32]);
         let task = reactor
+            .state
             .vct_repair
             .current_mut()
             .expect("the fixture has one repair task");
@@ -1077,20 +1122,22 @@ fn vct_admission_failures_preserve_retry_policy_state() {
         );
 
         let task = reactor
+            .state
             .vct_repair
             .current()
             .expect("an admission failure cannot recreate the repair task");
         assert_eq!(task.attempts, 2);
         if supplier_attributed {
-            // No membership event removed this synthetic prior source.
+            // Departed suppliers' charges hold for one cooldown.
             assert!(task.tried_sources.contains(&prior));
-            assert!(!task.tried_sources.contains(&source));
+            assert!(task.tried_sources.contains(&source));
             assert!(matches!(
                 &task.state,
                 RepairPolicyState::Ready { context: retained } if retained == &context
             ));
             assert_eq!(
                 reactor
+                    .state
                     .vct_repair_stall
                     .expect("the supplier failure keeps generation evidence")
                     .outcome,
@@ -1108,6 +1155,7 @@ fn vct_admission_failures_preserve_retry_policy_state() {
             ));
             assert_eq!(
                 reactor
+                    .state
                     .vct_repair_stall
                     .expect("the local failure keeps generation evidence")
                     .outcome,
@@ -1146,6 +1194,7 @@ fn vct_resource_refusal_waits_for_a_newer_committed_state() {
     );
 
     let task = reactor
+        .state
         .vct_repair
         .current()
         .expect("the committed refusal keeps the repair requirement");
@@ -1194,6 +1243,7 @@ fn vct_auxiliary_capacity_refusal_waits_without_timed_replay() {
     );
 
     let task = reactor
+        .state
         .vct_repair
         .current()
         .expect("the capacity refusal keeps the repair requirement");
@@ -1235,7 +1285,7 @@ fn vct_auxiliary_capacity_refusal_waits_without_timed_replay() {
             } if *query_owner == owner.body_owner().expect("the repair owner is a body owner")
         )),
         "new committed state must query the blocked repair context: {actions:?}; task: {:?}",
-        reactor.vct_repair.current()
+        reactor.state.vct_repair.current()
     );
 }
 
@@ -1261,6 +1311,7 @@ async fn a_failed_repair_send_still_tries_the_remaining_candidates() {
     assert!(matches!(
         fixture
             .reactor
+            .state
             .vct_repair
             .current()
             .expect("the repair remains")
@@ -1336,6 +1387,7 @@ fn stale_vct_episode_discards_the_claim_and_reads_current_state() {
     reactor.retry_vct_repair(owner, VctRepairRetry::stale(source));
 
     let replacement = reactor
+        .state
         .vct_repair
         .current()
         .expect("the unchanged durable need schedules a fresh context read");
@@ -1382,11 +1434,11 @@ fn generation_stall_escalation_owns_a_maintenance_deadline() {
         context,
         retry_at: Instant::now() + std::time::Duration::from_secs(120),
     };
-    reactor.vct_repair.insert(task.clone());
+    reactor.state.vct_repair.insert(task.clone());
     let now = Instant::now();
 
     reactor.note_vct_repair_stall(
-        &task,
+        task.repair_generation,
         anchor,
         VctSupplierRejections::default(),
         VctRepairStallOutcome::LocalFailure,
@@ -1394,6 +1446,7 @@ fn generation_stall_escalation_owns_a_maintenance_deadline() {
     );
 
     let stall = reactor
+        .state
         .vct_repair_stall
         .expect("the failed generation owns escalation state");
     assert_eq!(stall.last_trace, Some(now));
@@ -1404,6 +1457,7 @@ fn generation_stall_escalation_owns_a_maintenance_deadline() {
     let report_at = now + VCT_REPAIR_STALL_REPORT_AFTER;
     reactor.refresh_vct_repair_stall(report_at);
     let stall = reactor
+        .state
         .vct_repair_stall
         .expect("reporting keeps sampled generation state");
     assert!(stall.reported);
@@ -1429,6 +1483,7 @@ fn initial_vct_wire_assignment_arms_the_request_deadline() {
     ));
     let deadline = fixture
         .reactor
+        .state
         .request_deadlines
         .get(peer)
         .copied()
@@ -1464,6 +1519,7 @@ async fn unselected_supplier_waits_for_status_without_a_retry_deadline() {
     assert_eq!(
         fixture
             .reactor
+            .state
             .vct_repair
             .current()
             .unwrap()
@@ -1475,11 +1531,18 @@ async fn unselected_supplier_waits_for_status_without_a_retry_deadline() {
     assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
 
     fixture.advertise(&peers, 7);
+    assert!(
+        fixture.reactor.peer_work_queue.active(peer).is_none(),
+        "the status the supplier refused under cannot release it"
+    );
+
+    fixture.change_status();
+    fixture.advertise(&peers, 7);
     let retry = fixture
         .reactor
         .peer_work_queue
         .active(peer)
-        .expect("an unchanged status makes the sole supplier eligible again");
+        .expect("a changed status makes the sole supplier eligible again");
     assert_eq!(retry.owner.session_id(), first.owner.session_id());
     assert_ne!(retry.request_id, first.request_id);
     assert!(matches!(
@@ -1489,14 +1552,14 @@ async fn unselected_supplier_waits_for_status_without_a_retry_deadline() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn unselected_supplier_retries_on_an_unchanged_status_without_waiting() {
+async fn unselected_supplier_retries_on_a_changed_status_until_its_refusal_cap() {
     let mut fixture = ReadyVctRepairFixture::new();
     let (peers, _outbounds) = fixture.connect(&[0x71], 7);
     let peer = &peers[0];
     fixture.schedule();
     fixture.advertise(&peers, 7);
 
-    for _ in 0..3 {
+    for _ in 1..MAX_TARGET_REFUSALS_PER_SUPPLIER {
         let first = fixture
             .reactor
             .peer_work_queue
@@ -1506,7 +1569,10 @@ async fn unselected_supplier_retries_on_an_unchanged_status_without_waiting() {
         fixture.reply_not_selected(peer);
         fixture.reactor.refresh_statuses();
         assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
+        fixture.advertise(&peers, 7);
+        assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
 
+        fixture.change_status();
         fixture.advertise(&peers, 7);
         let retry = fixture
             .reactor
@@ -1516,6 +1582,16 @@ async fn unselected_supplier_retries_on_an_unchanged_status_without_waiting() {
         assert_eq!(retry.owner.session_id(), first.owner.session_id());
         assert_ne!(retry.request_id, first.request_id);
     }
+
+    fixture.reply_not_selected(peer);
+    fixture.change_status();
+    fixture.advertise(&peers, 7);
+    assert!(
+        fixture.reactor.peer_work_queue.active(peer).is_none(),
+        "a supplier at its refusal cap draws no more requests in this episode"
+    );
+    let task = fixture.reactor.state.vct_repair.current().unwrap();
+    assert!(task.tried_sources.contains(&source_id_from_peer(peer)));
 }
 
 #[test]
@@ -1530,6 +1606,7 @@ fn status_releases_only_the_sending_unselected_supplier() {
         .iter()
         .all(|peer| fixture.reactor.peer_work_queue.active(peer).is_none()));
 
+    fixture.change_status();
     fixture.advertise(&peers[1..], 8);
     assert!(fixture.reactor.peer_work_queue.active(&peers[0]).is_none());
     assert!(fixture.reactor.peer_work_queue.active(&peers[1]).is_some());
@@ -1543,13 +1620,17 @@ fn status_releases_only_the_sending_unselected_supplier() {
     assert!(fixture.reactor.peer_work_queue.active(&peers[1]).is_none());
 }
 
+/// A supplier keeps its failure history across a disconnect for one readmission
+/// cooldown, so reopening its header stream cannot clear a refusal or failure.
+/// A reconnect after the cooldown starts clean.
 #[tokio::test(start_paused = true)]
-async fn vct_supplier_disconnect_clears_failure_history_before_reconnect() {
+async fn vct_supplier_history_holds_across_a_reconnect_until_the_cooldown_ends() {
     for outcome in [
         HeadersOutcomeCode::TargetNotSelected,
         HeadersOutcomeCode::TargetNotRetained,
     ] {
         let mut fixture = ReadyVctRepairFixture::new();
+        let cooldown = fixture.reactor.startup.config.unproductive_peer_cooldown;
         let (peers, _old_outbounds) = fixture.connect(&[0x71], 7);
         let peer = &peers[0];
         fixture.schedule();
@@ -1577,36 +1658,27 @@ async fn vct_supplier_disconnect_clears_failure_history_before_reconnect() {
         let (reconnected, _new_outbounds) = fixture.connect(&[0x71], 8);
         assert_eq!(reconnected, peers);
         fixture.advertise(&reconnected, 8);
+        assert!(
+            fixture.reactor.peer_work_queue.active(peer).is_none(),
+            "{outcome:?}: a reconnect inside the cooldown resumes the supplier's history"
+        );
 
+        fixture
+            .reactor
+            .handle_peer_disconnected(peer, 8, "test disconnect");
+        time::advance(cooldown).await;
+        let (reconnected, _later_outbounds) = fixture.connect(&[0x71], 9);
+        fixture.advertise(&reconnected, 9);
         let retry = fixture
             .reactor
             .peer_work_queue
             .active(peer)
-            .expect("the reconnected supplier is eligible before the old deadline")
-            .clone();
-        assert_eq!(retry.owner.session_id(), 8);
+            .expect("a reconnect after the cooldown starts clean");
+        assert_eq!(retry.owner.session_id(), 9);
         assert!(matches!(
             retry.purpose,
             HeaderTargetPurpose::SelectedAuxiliaryRepair { .. }
         ));
-
-        fixture.reactor.deliver_outcome(
-            peer.clone(),
-            8,
-            HeadersOutcome {
-                subscription_id: retry.request_id.get(),
-                initial_target_tip_hash: fixture.target.hash,
-                outcome: HeadersOutcomeCode::TargetNotSelected,
-            },
-        );
-        let task = fixture.reactor.vct_repair.current().unwrap();
-        assert!(task.tried_sources.is_empty());
-        assert_eq!(
-            task.next_deadline(),
-            None,
-            "TargetNotSelected in the new session waits for another status"
-        );
-        assert!(task.supplier_is_waiting_for_status(retry.source));
     }
 }
 
@@ -1636,20 +1708,23 @@ async fn stale_events_preserve_reconnected_supplier_status_wait() {
             outcome: HeadersOutcomeCode::TargetNotSelected,
         },
     );
-    let before = fixture.reactor.vct_repair.current().unwrap().clone();
+    let before = fixture.reactor.state.vct_repair.current().unwrap().clone();
 
     fixture
         .reactor
         .handle_peer_disconnected(peer, 7, "late old session disconnect");
-    assert_eq!(fixture.reactor.peer_state[peer].session.session_id(), 8);
-    assert_eq!(fixture.reactor.vct_repair.current(), Some(&before));
+    assert_eq!(fixture.reactor.sessions[peer].session.session_id(), 8);
+    assert_eq!(fixture.reactor.state.vct_repair.current(), Some(&before));
     fixture.advertise(&reconnected, 7);
-    assert_eq!(fixture.reactor.vct_repair.current(), Some(&before));
+    assert_eq!(fixture.reactor.state.vct_repair.current(), Some(&before));
     assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
 
     time::advance(std::time::Duration::from_secs(300)).await;
     fixture.reactor.refresh_statuses();
     assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
+    fixture.advertise(&reconnected, 8);
+    assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
+    fixture.change_status();
     fixture.advertise(&reconnected, 8);
     assert_eq!(
         fixture
@@ -1664,7 +1739,7 @@ async fn stale_events_preserve_reconnected_supplier_status_wait() {
 }
 
 #[test]
-fn retained_old_session_repair_failure_keeps_the_new_session_eligible() {
+fn retained_old_session_repair_failure_charges_the_connected_supplier() {
     for phase in [HeaderTargetPhase::Preparing, HeaderTargetPhase::Applying] {
         for disconnect_first in [false, true] {
             let mut fixture = ReadyVctRepairFixture::new();
@@ -1716,19 +1791,30 @@ fn retained_old_session_repair_failure_keeps_the_new_session_eligible() {
                 _ => unreachable!("the fixture only retains local repair phases"),
             }
 
-            let retry = fixture
+            // The old session sent invalid headers, and the same identity is connected again.
+            assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
+            assert!(fixture
                 .reactor
-                .peer_work_queue
-                .active(peer)
-                .expect("a late failure from the old session does not exclude its replacement");
-            assert_eq!(retry.owner.session_id(), 8);
-            assert!(!fixture
-                .reactor
+                .state
                 .vct_repair
                 .current()
                 .unwrap()
                 .tried_sources
                 .contains(&old.source));
+            fixture
+                .reactor
+                .handle_peer_disconnected(peer, 8, "test disconnect");
+            assert!(
+                fixture
+                    .reactor
+                    .state
+                    .vct_repair
+                    .current()
+                    .unwrap()
+                    .tried_sources
+                    .contains(&old.source),
+                "the charge holds after the supplier disconnects"
+            );
         }
     }
 }
@@ -1758,6 +1844,7 @@ async fn unselected_vct_supplier_rotates_without_delaying_another_supplier() {
     assert!(fixture.reactor.peer_work_queue.active(&peers[1]).is_some());
     assert!(fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .unwrap()
@@ -1793,7 +1880,7 @@ async fn unselected_suppliers_give_a_smaller_repair_supplier_its_turn() {
             "the refusal arrives before the request timeout"
         );
         fixture.reply_not_selected(peer);
-        let session_id = fixture.reactor.peer_state[peer].session.session_id();
+        let session_id = fixture.reactor.sessions[peer].session.session_id();
         for _ in 0..3 {
             fixture.advertise(std::slice::from_ref(peer), session_id);
         }
@@ -1810,10 +1897,14 @@ async fn unselected_suppliers_give_a_smaller_repair_supplier_its_turn() {
     ));
     assert_eq!(active.max_header_count, 1);
     assert_eq!(active.target.status.selected_tip_hash, fixture.target.hash);
-    assert_eq!(fixture.reactor.vct_repair.current().unwrap().attempts, 3);
+    assert_eq!(
+        fixture.reactor.state.vct_repair.current().unwrap().attempts,
+        3
+    );
     assert!(fixture
         .reactor
-        .peer_state
+        .state
+        .peers
         .values()
         .all(|peer| peer.unproductive_requests == 0));
 }
@@ -1859,7 +1950,7 @@ fn successful_supplier_gives_the_next_repair_to_a_waiting_supplier() {
         HeaderTargetAdmissionResult::Applied,
     );
     assert!(matches!(
-        fixture.reactor.vct_repair.current().unwrap().state,
+        fixture.reactor.state.vct_repair.current().unwrap().state,
         RepairPolicyState::Completed
     ));
 
@@ -1929,8 +2020,11 @@ async fn reconnecting_suppliers_give_a_waiting_repair_supplier_its_turn() {
             HeaderTargetPurpose::SelectedAuxiliaryRepair { .. }
         ));
         assert_eq!(active.max_header_count, 1);
-        assert_eq!(fixture.reactor.vct_repair.current().unwrap().attempts, 3);
-        assert_eq!(fixture.reactor.peer_state.len(), 4);
+        assert_eq!(
+            fixture.reactor.state.vct_repair.current().unwrap().attempts,
+            3
+        );
+        assert_eq!(fixture.reactor.sessions.len(), 4);
     }
 }
 
@@ -1949,6 +2043,7 @@ fn local_capacity_backoff_starts_the_generation_stall_clock() {
 
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("local capacity backoff keeps the repair");
@@ -1964,6 +2059,7 @@ fn local_capacity_backoff_starts_the_generation_stall_clock() {
     assert_eq!(
         fixture
             .reactor
+            .state
             .vct_repair_stall
             .expect("local capacity starts the generation stall clock")
             .outcome,
@@ -2045,12 +2141,13 @@ fn supplier_failures_rotate_to_an_untried_fourth_supplier_without_repeating() {
 
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the fourth supplier keeps the repair requirement");
     assert_eq!(task.tried_sources.len(), 3);
     assert_eq!(
-        fixture.reactor.vct_supplier_order,
+        fixture.reactor.state.vct_supplier_order,
         [
             peers[3].clone(),
             peers[0].clone(),
@@ -2062,6 +2159,7 @@ fn supplier_failures_rotate_to_an_untried_fourth_supplier_without_repeating() {
     );
     let stall = fixture
         .reactor
+        .state
         .vct_repair_stall
         .expect("a complete failed cycle starts the generation stall clock");
 
@@ -2076,14 +2174,19 @@ fn supplier_failures_rotate_to_an_untried_fourth_supplier_without_repeating() {
     ));
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the fourth supplier owns the current repair");
     assert_eq!(task.tried_sources.len(), 3);
-    assert_eq!(fixture.reactor.vct_supplier_order.front(), Some(&peers[3]));
+    assert_eq!(
+        fixture.reactor.state.vct_supplier_order.front(),
+        Some(&peers[3])
+    );
     assert_eq!(
         fixture
             .reactor
+            .state
             .vct_repair_stall
             .expect("assignment preserves the generation stall clock")
             .since,
@@ -2127,12 +2230,12 @@ fn established_supplier_precedes_new_identities_after_adversarial_churn() {
     _outbounds.extend(churn_outbounds);
 
     assert_eq!(
-        fixture.reactor.vct_supplier_order.front(),
+        fixture.reactor.state.vct_supplier_order.front(),
         Some(&established[3])
     );
     assert_eq!(
-        fixture.reactor.vct_supplier_order.len(),
-        fixture.reactor.peer_state.len()
+        fixture.reactor.state.vct_supplier_order.len(),
+        fixture.reactor.sessions.len()
     );
     assert!(fixture
         .reactor
@@ -2144,12 +2247,16 @@ fn established_supplier_precedes_new_identities_after_adversarial_churn() {
         .all(|peer| fixture.reactor.peer_work_queue.active(peer).is_none()));
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the established supplier keeps the repair requirement");
-    assert!(established[..3]
-        .iter()
-        .all(|peer| !task.tried_sources.contains(&source_id_from_peer(peer))));
+    assert!(
+        established[..3]
+            .iter()
+            .all(|peer| task.tried_sources.contains(&source_id_from_peer(peer))),
+        "departed suppliers' failures hold for one cooldown"
+    );
 }
 
 #[test]
@@ -2162,6 +2269,7 @@ fn disconnected_supplier_history_cannot_block_a_new_supplier() {
     {
         let task = fixture
             .reactor
+            .state
             .vct_repair
             .current_mut()
             .expect("the repair requirement is scheduled");
@@ -2189,10 +2297,16 @@ fn disconnected_supplier_history_cannot_block_a_new_supplier() {
     assert!(fixture.reactor.peer_work_queue.active(peer).is_some());
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the new supplier owns the repair requirement");
-    assert!(task.tried_sources.is_empty());
+    let limits = fixture.reactor.startup.config.peer_limits;
+    assert!(
+        task.tried_sources.len() <= limits.max_inbound_peers + limits.max_outbound_peers,
+        "the admitted peer limits bound departed suppliers' history"
+    );
+    assert!(!task.tried_sources.contains(&source));
 }
 
 #[test]
@@ -2214,16 +2328,17 @@ fn replacement_session_retries_the_interrupted_repair() {
             CancellationToken::new(),
         ));
 
-    assert_eq!(fixture.reactor.peer_state.len(), 1);
+    assert_eq!(fixture.reactor.sessions.len(), 1);
     assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the replacement keeps the repair scheduled");
     assert!(task.tried_sources.is_empty());
     assert_eq!(
-        fixture.reactor.vct_supplier_order,
+        fixture.reactor.state.vct_supplier_order,
         [peer.clone()].into_iter().collect::<VecDeque<_>>()
     );
     assert!(matches!(task.state, RepairPolicyState::Ready { .. }));
@@ -2242,7 +2357,7 @@ fn replacement_session_retries_the_interrupted_repair() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn replacement_session_clears_busy_history_before_the_old_disconnect() {
+async fn replacement_session_keeps_busy_history_until_a_changed_status() {
     let mut fixture = ReadyVctRepairFixture::new();
     let (peers, _old_outbounds) = fixture.connect(&[0x71], 7);
     let peer = &peers[0];
@@ -2251,30 +2366,89 @@ async fn replacement_session_clears_busy_history_before_the_old_disconnect() {
     fixture.reply_not_selected(peer);
     let (replacement, _new_outbounds) = fixture.connect(&[0x71], 8);
     fixture.advertise(&replacement, 8);
+    assert!(
+        fixture.reactor.peer_work_queue.active(peer).is_none(),
+        "a replacement's unchanged status cannot release the wait"
+    );
 
+    fixture.change_status();
+    fixture.advertise(&replacement, 8);
     assert_eq!(
         fixture
             .reactor
             .peer_work_queue
             .active(peer)
-            .expect("the replacement's first status makes it eligible")
+            .expect("the replacement's changed status makes it eligible")
             .owner
             .session_id(),
         8
     );
     fixture.reply_not_selected(peer);
-    let before = fixture.reactor.vct_repair.current().unwrap().clone();
+    let before = fixture.reactor.state.vct_repair.current().unwrap().clone();
     assert_eq!(before.next_deadline(), None);
     fixture
         .reactor
         .handle_peer_disconnected(peer, 7, "late replaced session");
-    assert_eq!(fixture.reactor.vct_repair.current(), Some(&before));
-    assert_eq!(fixture.reactor.peer_state[peer].session.session_id(), 8);
+    assert_eq!(fixture.reactor.state.vct_repair.current(), Some(&before));
+    assert_eq!(fixture.reactor.sessions[peer].session.session_id(), 8);
+    fixture.change_status();
     fixture.advertise(&replacement, 7);
-    assert_eq!(fixture.reactor.vct_repair.current(), Some(&before));
+    assert_eq!(fixture.reactor.state.vct_repair.current(), Some(&before));
     assert!(fixture.reactor.peer_work_queue.active(peer).is_none());
     fixture.advertise(&replacement, 8);
     assert!(fixture.reactor.peer_work_queue.active(peer).is_some());
+}
+
+#[test]
+fn a_supplier_failure_holds_across_replacement_and_disconnect() {
+    let mut fixture = ReadyVctRepairFixture::new();
+    let (peers, _old_outbounds) = fixture.connect(&[0x71], 7);
+    let peer = &peers[0];
+    fixture.schedule();
+    fixture.advertise(&peers, 7);
+    let first = fixture
+        .reactor
+        .peer_work_queue
+        .active(peer)
+        .unwrap()
+        .clone();
+    fixture.reactor.deliver_outcome(
+        peer.clone(),
+        7,
+        HeadersOutcome {
+            subscription_id: first.request_id.get(),
+            initial_target_tip_hash: fixture.target.hash,
+            outcome: HeadersOutcomeCode::TargetNotRetained,
+        },
+    );
+    let tried = |fixture: &ReadyVctRepairFixture| {
+        fixture
+            .reactor
+            .state
+            .vct_repair
+            .current()
+            .unwrap()
+            .tried_sources
+            .contains(&first.source)
+    };
+    assert!(tried(&fixture));
+
+    let (replacement, _new_outbounds) = fixture.connect(&[0x71], 8);
+    fixture.change_status();
+    fixture.advertise(&replacement, 8);
+    assert!(
+        fixture.reactor.peer_work_queue.active(peer).is_none(),
+        "a replacement session does not clear the supplier's failure"
+    );
+    assert!(tried(&fixture));
+
+    fixture
+        .reactor
+        .handle_peer_disconnected(peer, 8, "test disconnect");
+    assert!(
+        tried(&fixture),
+        "reopening the header stream cannot clear the failure"
+    );
 }
 
 #[test]
@@ -2323,7 +2497,10 @@ fn replacement_and_disconnect_retain_owned_vct_local_operation() {
         HeaderTargetPhase::Applying,
     );
     let deadline = Instant::now() + reactor.startup.request_timeout;
-    reactor.request_deadlines.insert(peer.clone(), deadline);
+    reactor
+        .state
+        .request_deadlines
+        .insert(peer.clone(), deadline);
 
     let (replacement_send, _replacement_outbound) = framed_channel(8);
     reactor.handle_peer_connected(PeerSession::from_parts_with_session_id(
@@ -2341,18 +2518,16 @@ fn replacement_and_disconnect_retain_owned_vct_local_operation() {
             .map(|active| (active.owner, active.phase)),
         Some((owner, HeaderTargetPhase::Applying))
     );
-    assert_eq!(reactor.request_deadlines.get(&peer), Some(&deadline));
-    assert_eq!(
-        reactor.vct_repair.current().map(|task| &task.state),
-        Some(&RepairPolicyState::Assigned {
-            context: context.clone()
-        })
-    );
+    assert_eq!(reactor.state.request_deadlines.get(&peer), Some(&deadline));
+    assert!(matches!(
+        reactor.state.vct_repair.current().map(|task| &task.state),
+        Some(RepairPolicyState::Assigned { context: assigned, .. }) if assigned == &context
+    ));
 
     reactor.handle_peer_disconnected(&peer, 8, "replacement disconnected");
 
-    assert!(!reactor.peer_state.contains_key(&peer));
-    assert!(reactor.vct_supplier_order.is_empty());
+    assert!(!reactor.sessions.contains_key(&peer));
+    assert!(reactor.state.vct_supplier_order.is_empty());
     assert_eq!(
         reactor
             .peer_work_queue
@@ -2360,11 +2535,11 @@ fn replacement_and_disconnect_retain_owned_vct_local_operation() {
             .map(|active| (active.owner, active.phase)),
         Some((owner, HeaderTargetPhase::Applying))
     );
-    assert_eq!(reactor.request_deadlines.get(&peer), Some(&deadline));
-    assert_eq!(
-        reactor.vct_repair.current().map(|task| &task.state),
-        Some(&RepairPolicyState::Assigned { context })
-    );
+    assert_eq!(reactor.state.request_deadlines.get(&peer), Some(&deadline));
+    assert!(matches!(
+        reactor.state.vct_repair.current().map(|task| &task.state),
+        Some(RepairPolicyState::Assigned { context: assigned, .. }) if assigned == &context
+    ));
 }
 
 #[test]
@@ -2379,6 +2554,7 @@ fn local_send_failures_back_off_without_consuming_a_supplier() {
 
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the repair remains");
@@ -2386,7 +2562,7 @@ fn local_send_failures_back_off_without_consuming_a_supplier() {
     assert!(task.tried_sources.is_empty());
     assert_eq!(task.attempts, 1);
     assert_eq!(
-        fixture.reactor.vct_supplier_order,
+        fixture.reactor.state.vct_supplier_order,
         [
             peers[0].clone(),
             peers[1].clone(),
@@ -2398,11 +2574,13 @@ fn local_send_failures_back_off_without_consuming_a_supplier() {
     );
     let stall = fixture
         .reactor
+        .state
         .vct_repair_stall
         .expect("the local send failure starts the stall clock");
 
     fixture
         .reactor
+        .state
         .vct_repair
         .current_mut()
         .expect("the repair remains")
@@ -2411,6 +2589,7 @@ fn local_send_failures_back_off_without_consuming_a_supplier() {
 
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the repair remains");
@@ -2418,7 +2597,7 @@ fn local_send_failures_back_off_without_consuming_a_supplier() {
     assert!(task.tried_sources.is_empty());
     assert_eq!(task.attempts, 2);
     assert_eq!(
-        fixture.reactor.vct_supplier_order,
+        fixture.reactor.state.vct_supplier_order,
         [
             peers[0].clone(),
             peers[1].clone(),
@@ -2431,6 +2610,7 @@ fn local_send_failures_back_off_without_consuming_a_supplier() {
     assert_eq!(
         fixture
             .reactor
+            .state
             .vct_repair_stall
             .expect("the bounded retry preserves the stall clock")
             .since,
@@ -2468,7 +2648,10 @@ async fn disconnected_preparation_retains_capacity_until_completion() {
         },
         entries: std::mem::take(&mut active.entries),
     };
-    assert!(reactor.dispatch_action(operation));
+    assert!(matches!(
+        reactor.dispatch_action(operation),
+        StorageDispatch::Started(_)
+    ));
     assert!(reactor
         .pending_port_operations
         .next()
@@ -2501,7 +2684,7 @@ fn repair_keeps_schema_one_and_rotates_after_history_pruned() {
     let (peers, _outbounds) = fixture.connect(&[1, 2], 7);
     let fallback = PrunedBackoff::after(None, Instant::now());
     for peer in &peers {
-        fixture.reactor.pruned_peers.insert(
+        fixture.reactor.state.pruned_peers.insert(
             peer.clone(),
             PrunedPeer {
                 aux_fallback: Some(fallback),
@@ -2537,13 +2720,14 @@ fn repair_keeps_schema_one_and_rotates_after_history_pruned() {
                 outcome: HeadersOutcomeCode::HistoryPruned,
             },
         );
-        let pruned = fixture.reactor.pruned_peers[peer];
+        let pruned = fixture.reactor.state.pruned_peers[peer];
         assert_eq!(pruned.aux_fallback, Some(fallback));
         assert!(pruned.pruned_pause.is_none());
-        assert_eq!(fixture.reactor.peer_state[peer].unproductive_requests, 0);
+        assert_eq!(fixture.reactor.state.peers[peer].unproductive_requests, 0);
     }
     let task = fixture
         .reactor
+        .state
         .vct_repair
         .current()
         .expect("the repair requirement remains");

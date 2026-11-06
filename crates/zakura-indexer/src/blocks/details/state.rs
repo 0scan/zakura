@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time;
 use tower::ServiceExt;
 use zakura_chain::{
-    block::{Block, Hash, Height},
+    block::{BlockRef, Hash, Height},
     block_info::BlockInfo,
     ironwood, orchard,
     parameters::{Network, NetworkUpgrade},
@@ -137,14 +137,13 @@ where
 
 pub(super) async fn load_spent_output_statuses<State>(
     read_state: State,
-    block: &Block,
+    block: &BlockRef,
 ) -> Result<HashMap<OutPoint, bool>, Error>
 where
     State: ReadState,
 {
     let outpoints = block
-        .transactions
-        .iter()
+        .transactions()
         .flat_map(|transaction| {
             let transaction_hash = transaction.hash();
             (0..transaction.outputs().len())
@@ -168,14 +167,13 @@ where
 
 pub(super) async fn load_transparent_inputs<State>(
     read_state: State,
-    block: &Block,
+    block: &BlockRef,
 ) -> Result<HashMap<OutPoint, Utxo>, Error>
 where
     State: ReadState,
 {
     let outpoints = block
-        .transactions
-        .iter()
+        .transactions()
         .flat_map(|transaction| {
             transaction
                 .inputs()

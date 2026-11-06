@@ -4,6 +4,7 @@ use std::{ops::RangeInclusive, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use zakura_chain::{block, transaction, transparent};
+use zakura_node_services::block_memory::{BlockHandle, TransactionHandle};
 
 pub use super::storage::disk_format::{
     ExplorerAddressRecord, ExplorerShieldedFlow, ExplorerShieldedPool, ExplorerTransactionKind,
@@ -189,7 +190,7 @@ pub enum ExplorerReadResponse {
     /// Canonical transparent-address state and transactions.
     AddressPage(Box<ExplorerAddressPage>),
     /// Canonical transactions, parallel to the requested locations.
-    TransactionsByLocation(Vec<Option<Arc<transaction::Transaction>>>),
+    TransactionsByLocation(Vec<Option<TransactionHandle>>),
     /// Canonical totals and trailing activity.
     StatsSnapshot(ExplorerStatsSnapshot),
     /// Canonical daily analytics in chronological order.
@@ -313,7 +314,7 @@ pub struct ExplorerTransactionPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExplorerBlockSummary {
     /// Canonical block body.
-    pub block: Arc<block::Block>,
+    pub block: BlockHandle,
     /// Consensus-serialized block size in bytes.
     pub serialized_size: u32,
     /// Sum of non-coinbase transaction fees in zatoshis.

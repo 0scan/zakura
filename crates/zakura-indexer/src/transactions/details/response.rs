@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use zakura_chain::{
-    block::{Block, Hash, Height},
+    block::{BlockRef, Hash, Height},
     parameters::Network,
     serialization::ZcashSerialize,
     transaction::Transaction,
@@ -51,15 +51,14 @@ impl TransactionChainStatus {
 
 pub(crate) fn build_block_transactions(
     network: &Network,
-    block: &Block,
+    block: &BlockRef,
     height: Height,
     hash: Hash,
     transparent_inputs: &HashMap<OutPoint, Utxo>,
     spent_outputs: &HashMap<OutPoint, bool>,
 ) -> Result<Vec<BlockTransaction>, Error> {
     block
-        .transactions
-        .iter()
+        .transactions()
         .enumerate()
         .map(|(transaction_index, transaction)| {
             let transaction_index = count_u32(transaction_index, "transaction index")?;
@@ -72,7 +71,7 @@ pub(crate) fn build_block_transactions(
                         transaction_index,
                     },
                     block_hash: hash,
-                    block_time: block.header.time.timestamp(),
+                    block_time: block.header().time.timestamp(),
                 },
                 transparent_inputs,
                 spent_outputs,

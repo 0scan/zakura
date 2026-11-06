@@ -1,10 +1,8 @@
 //! Conversion of canonical state and indexed summaries into the RPC contract.
 
-use std::sync::Arc;
-
 use hex::ToHex;
 use zakura_chain::{
-    block::{Block, Commitment, Height},
+    block::{BlockRef, Commitment, Height},
     parameters::{Network, NetworkUpgrade},
     serialization::BytesInDisplayOrder,
 };
@@ -17,7 +15,7 @@ use crate::{
 
 pub(super) fn assemble(
     network: &Network,
-    block: Arc<Block>,
+    block: &BlockRef,
     summary: BlockRecord,
     height: Height,
     state: StateDetails,
@@ -42,7 +40,7 @@ pub(super) fn assemble(
         .map(|tree| hex::encode(tree.root().bytes_in_display_order()));
 
     let block_commitments = match block
-        .header
+        .header()
         .commitment(network, height)
         .map_err(|error| Error::Calculation(error.to_string()))?
     {
@@ -63,12 +61,12 @@ pub(super) fn assemble(
     };
 
     let coinbase_script = block
-        .transactions
-        .first()
+        .transactions()
+        .next()
         .and_then(|transaction| transaction.inputs().first())
         .and_then(|input| input.coinbase_script());
     let coinbase_hex = coinbase_script.as_deref().map(hex::encode);
-    let mut nonce = *block.header.nonce;
+    let mut nonce = *block.header().nonce;
     nonce.reverse();
 
     Ok(BlockDetails {
@@ -77,16 +75,16 @@ pub(super) fn assemble(
         canonical: true,
         finalized: state.finalized,
         is_orphaned: false,
-        version: block.header.version,
-        merkle_root: block.header.merkle_root.encode_hex(),
+        version: block.header().version,
+        merkle_root: block.header().merkle_root.encode_hex(),
         block_commitments: hex::encode(block_commitments),
         final_sapling_root: hex::encode(sapling_root),
         final_orchard_root: orchard_root,
         final_ironwood_root: ironwood_root,
-        bits: block.header.difficulty_threshold.to_string(),
+        bits: block.header().difficulty_threshold.to_string(),
         nonce: hex::encode(nonce),
-        solution: block.header.solution.encode_hex(),
-        previous_block_hash: block.header.previous_block_hash.to_string(),
+        solution: block.header().solution.encode_hex(),
+        previous_block_hash: block.header().previous_block_hash.to_string(),
         next_block_hash: state.next_block_hash.map(|hash| hash.to_string()),
         chain_supply,
         value_pools,

@@ -515,7 +515,7 @@ fn prepare_rollback(
         .map(Height)
     {
         let block = db
-            .block(height.into())
+            .stored_block(height.into())
             .ok_or(RollbackFinalizedStateError::MissingBlock { height })?;
         let semantically_verified = SemanticallyVerifiedBlock::from(block.clone())
             .with_deferred_pool_balance_change(deferred_pool_balance_change(db, height, network)?);
@@ -676,7 +676,13 @@ fn rebuild_history_tree_from_upgrade_activation(
         let (block, sapling_root, orchard_root, ironwood_root) =
             history_rebuild_inputs_at_height(db, height)?;
 
-        history_tree.push(network, block, &sapling_root, &orchard_root, &ironwood_root)?;
+        history_tree.push(
+            network,
+            &block,
+            &sapling_root,
+            &orchard_root,
+            &ironwood_root,
+        )?;
     }
 
     Ok(history_tree)
@@ -695,7 +701,7 @@ fn history_rebuild_inputs_at_height(
     RollbackFinalizedStateError,
 > {
     let block = db
-        .block(height.into())
+        .stored_block(height.into())
         .ok_or(RollbackFinalizedStateError::MissingBlock { height })?;
 
     if let Some(roots) = db
@@ -738,7 +744,7 @@ fn rebuild_treestate_to_height(
 
     for height in (Height::MIN.0..=target_height.0).map(Height) {
         let block = db
-            .block(height.into())
+            .stored_block(height.into())
             .ok_or(RollbackFinalizedStateError::MissingBlock { height })?;
 
         note_commitment_trees.update_trees_parallel(&block)?;
@@ -747,7 +753,13 @@ fn rebuild_treestate_to_height(
         let sapling_root = note_commitment_trees.sapling.root();
         let orchard_root = note_commitment_trees.orchard.root();
         let ironwood_root = note_commitment_trees.ironwood.root();
-        history_tree.push(network, block, &sapling_root, &orchard_root, &ironwood_root)?;
+        history_tree.push(
+            network,
+            &block,
+            &sapling_root,
+            &orchard_root,
+            &ironwood_root,
+        )?;
     }
 
     Ok(RebuiltTreestate {
@@ -921,11 +933,11 @@ fn finalized_output(
             hash: outpoint.hash,
         },
     )?;
-    let transaction =
-        db.transaction(outpoint.hash)
-            .ok_or(RollbackFinalizedStateError::MissingTransaction {
-                hash: outpoint.hash,
-            })?;
+    let transaction = db.stored_transaction(outpoint.hash).ok_or(
+        RollbackFinalizedStateError::MissingTransaction {
+            hash: outpoint.hash,
+        },
+    )?;
     let output = transaction
         .0
         .outputs()
@@ -1612,7 +1624,8 @@ mod tests {
         db.write_batch(batch)
             .expect("seeding the serving index succeeds");
 
-        let served = crate::service::finalized_state::serve_block_roots(&db, Height(4)..=Height(6));
+        let served =
+            crate::service::finalized_state::serve_block_roots(&db, Height(4)..=Height(6)).unwrap();
         assert_eq!(
             served
                 .into_iter()

@@ -11,6 +11,7 @@ use zakura_chain::{
     transaction::{self, Transaction},
     transparent,
 };
+use zakura_node_services::block_memory::{AdmissionFailure, TransactionHandle};
 
 use crate::{
     explorer::{
@@ -76,7 +77,7 @@ pub fn handle(
             ExplorerReadResponse::TransactionSummary(explorer_transaction_summary(chain, db, txid))
         }
         ExplorerReadRequest::BlockSummaries(heights) => {
-            ExplorerReadResponse::BlockSummaries(explorer_block_summaries(chain, db, &heights))
+            ExplorerReadResponse::BlockSummaries(explorer_block_summaries(chain, db, &heights)?)
         }
         ExplorerReadRequest::AddressPage {
             address,
@@ -119,20 +120,24 @@ pub fn explorer_block_summaries(
     chain: Option<Arc<Chain>>,
     db: &ZakuraDb,
     heights: &[zakura_chain::block::Height],
-) -> Vec<Option<ExplorerBlockSummary>> {
+) -> Result<Vec<Option<ExplorerBlockSummary>>, AdmissionFailure> {
     let network = db.network();
     heights
         .iter()
         .map(|height| {
-            let (block, serialized_size) = block_and_size(chain.clone(), db, (*height).into())?;
+            let Some((block, serialized_size)) =
+                block_and_size(chain.clone(), db, (*height).into())?
+            else {
+                return Ok(None);
+            };
             let total_fees_zat = if let Some(contextual) = chain
                 .as_ref()
                 .and_then(|chain| chain.block((*height).into()))
             {
                 contextual
                     .block
-                    .transactions
-                    .iter()
+                    .view()
+                    .transactions()
                     .enumerate()
                     .filter(|(index, _)| *index > 0)
                     .map(|(index, transaction)| {
@@ -149,12 +154,12 @@ pub fn explorer_block_summaries(
             } else {
                 db.explorer_block_total_fees(*height)
             };
-            Some(ExplorerBlockSummary {
+            Ok(Some(ExplorerBlockSummary {
                 block,
                 serialized_size: u32::try_from(serialized_size)
                     .expect("verified block size fits in u32"),
                 total_fees_zat,
-            })
+            }))
         })
         .collect()
 }
@@ -374,15 +379,15 @@ pub fn explorer_transactions_by_location(
     chain: Option<Arc<Chain>>,
     db: &ZakuraDb,
     locations: &[TransactionLocation],
-) -> Vec<Option<Arc<Transaction>>> {
+) -> Vec<Option<TransactionHandle>> {
     EXPLORER_READ_POOL.install(|| {
         locations
             .par_iter()
             .map(|location| {
                 chain
                     .as_ref()
-                    .and_then(|chain| chain.transaction_by_loc(*location).cloned())
-                    .or_else(|| finalized_transaction_at(db, *location))
+                    .and_then(|chain| chain.transaction_by_loc(*location))
+                    .or_else(|| finalized_transaction_at(db, *location).map(Into::into))
             })
             .collect()
     })
@@ -688,7 +693,7 @@ pub fn explorer_daily_stats(
             .map(|(outpoint, ordered)| (*outpoint, ordered.utxo.clone()))
             .collect::<HashMap<_, _>>();
         let block = super::analytics::derive_block_stats(
-            &contextual.block,
+            contextual.block.view(),
             height,
             block_info.size(),
             *block_info.value_pools(),
@@ -718,7 +723,7 @@ fn apply_live_transparent_balance_changes(
     mut funded_count: u64,
 ) -> u64 {
     let mut changes = HashMap::<transparent::Address, i128>::new();
-    for transaction in &block.block.transactions {
+    for transaction in block.block.view().transactions() {
         for outpoint in transaction
             .inputs()
             .iter()
@@ -857,9 +862,9 @@ fn explorer_transaction_summary_at_location(
 ) -> Option<ExplorerTransactionSummary> {
     if let Some(chain) = chain {
         if let Some(block) = chain.block(location.height.into()) {
-            let transaction = block.block.transactions.get(location.index.as_usize())?;
+            let transaction = block.block.transaction(location.index.as_usize())?;
             let record = explorer_transaction_record_with_ordered_utxos(
-                transaction,
+                &transaction,
                 location.index.as_usize(),
                 &db.network(),
                 &block.spent_outputs,
@@ -868,7 +873,7 @@ fn explorer_transaction_summary_at_location(
                 location,
                 txid: *block.transaction_hashes.get(location.index.as_usize())?,
                 block_hash: block.hash,
-                block_time: block.block.header.time.timestamp(),
+                block_time: block.block.view().header().time.timestamp(),
                 record,
             });
         }
@@ -945,7 +950,7 @@ fn non_finalized_summaries(
         let block = chain
             .block(zakura_chain::block::Height(height).into())
             .expect("every height between the non-finalized root and tip has a block");
-        for (transaction_index, transaction) in block.block.transactions.iter().enumerate() {
+        for (transaction_index, transaction) in block.block.view().transactions().enumerate() {
             let location = TransactionLocation::from_usize(block.height, transaction_index);
             let is_cursor_adjacent = match (direction, cursor) {
                 (ExplorerPageDirection::Older, Some(cursor)) => location < cursor,
@@ -973,7 +978,7 @@ fn non_finalized_summaries(
                 location,
                 txid,
                 block_hash: block.hash,
-                block_time: block.block.header.time.timestamp(),
+                block_time: block.block.view().header().time.timestamp(),
                 record,
             });
         }
